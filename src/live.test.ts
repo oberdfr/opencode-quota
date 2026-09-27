@@ -3,9 +3,10 @@ import { formatReport } from "./format.ts";
 import { parseQuotaReport } from "./rpc.ts";
 
 /**
- * Captured from a live `/api/rpc/quota/report` call against real connected
+ * Shape captured from a live `/api/rpc/quota/report` call against real connected
  * accounts, so this guards the rendering against the payload shape the two
- * providers actually produce rather than an invented fixture.
+ * providers actually produce rather than an invented fixture. Identifiers are
+ * replaced with placeholders; the values are otherwise untouched.
  */
 const LIVE_RESPONSE = {
   output: {
@@ -13,9 +14,9 @@ const LIVE_RESPONSE = {
     notes: [],
     accounts: [
       {
-        key: "antigravity:alebennella@gmail.com",
+        key: "antigravity:work@example.com",
         provider: "antigravity",
-        email: "alebennella@gmail.com",
+        email: "work@example.com",
         status: "ok",
         lines: [
           { id: "antigravity:gemini-pro", label: "Gemini Pro", remainingPercent: 33.5, resetTime: "2026-09-30T16:29:32Z" },
@@ -57,7 +58,7 @@ describe("formatReport against a live response", () => {
   });
 
   it("renders the Antigravity groups with their remaining percentages", () => {
-    expect(output).toContain("alebennella@gmail.com");
+    expect(output).toContain("work@example.com");
     expect(output).toContain("Gemini Pro: 34%");
     expect(output).toContain("Gemini Flash: 34%");
     // A spent allowance still renders, rather than being hidden.
