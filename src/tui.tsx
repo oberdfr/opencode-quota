@@ -65,8 +65,21 @@ export default Plugin.define({
     let disposeRoot: (() => void) | undefined;
     let spinner: ReturnType<typeof setInterval> | undefined;
     const [frame, setFrame] = createSignal(0);
+    // Whether a quota dialog is on screen.
+    //
+    // Deliberately a plain boolean rather than a signal. This value gates a
+    // keymap command, and the host resolves `enabled` through a reactive
+    // computation, so a signal-free read can be evaluated once and cached with
+    // no way to re-check it. Depending on that re-evaluation made escape
+    // unreliable, so the binding is registered unconditionally and the state is
+    // checked here instead, where it is always live.
+    let dialogIsOpen = false;
 
     const close = () => {
+      // Guarded so an escape press that lands with no quota dialog on screen
+      // cannot clear a dialog belonging to something else.
+      if (!dialogIsOpen) return;
+      dialogIsOpen = false;
       if (spinner !== undefined) {
         clearInterval(spinner);
         spinner = undefined;
@@ -86,7 +99,8 @@ export default Plugin.define({
 
     const open = () => {
       // Ignore a second /quota while one is already on screen.
-      if (disposeRoot) return;
+      if (dialogIsOpen) return;
+      dialogIsOpen = true;
 
       const cached = cache.report;
       // createRoot passes its disposer to the callback, so the root can be torn
@@ -191,7 +205,19 @@ export default Plugin.define({
       };
 
       return (
-        <box flexDirection="column" paddingLeft={4} paddingRight={4}>
+        <box
+          flexDirection="column"
+          paddingLeft={4}
+          paddingRight={4}
+          // Second, independent way out. A custom dialog owns its own dismissal,
+          // so the dialog's root renderable takes focus and closes on escape
+          // directly. This does not rely on the host delivering keys to plugin
+          // keymap layers while a dialog is on screen.
+          focusable
+          onKeyDown={(event) => {
+            if (event.name === "escape") close();
+          }}
+        >
           <text fg={base}>Quota</text>
 
           {(() => {
@@ -261,12 +287,13 @@ export default Plugin.define({
               title: "Close quota",
               group: "opencode-quota",
               bind: "escape",
-              // Only active while the dialog is up, so escape keeps its normal
-              // meaning everywhere else.
-              enabled: () => disposeRoot !== undefined,
+              // No `enabled` gate. The host resolves `enabled` reactively, so
+              // gating the binding on live state risks it being evaluated once
+              // and cached. `close()` checks whether a quota dialog is actually
+              // open instead, and returns false so the host still handles the
+              // key it was already seeing.
               run: () => {
                 close();
-                // Let the host keep handling the key it was already seeing.
                 return false;
               },
             },
