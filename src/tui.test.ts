@@ -36,7 +36,7 @@ function deferred<T>() {
 function createContext(report?: { promise: Promise<unknown> }) {
   const state = {
     insideSlotRender: false,
-    layers: [] as Array<{ commands: Array<Record<string, any>> }>,
+    layers: [] as Array<{ commands: Array<Record<string, any>>; bindings?: string[] }>,
     slotClaim: undefined as { render: (input: unknown) => unknown } | undefined,
     disposed: false,
     dialogShown: 0,
@@ -65,7 +65,7 @@ function createContext(report?: { promise: Promise<unknown> }) {
       },
     },
     keymap: {
-      layer: (factory: () => { commands: Array<Record<string, any>> }) => {
+      layer: (factory: () => { commands: Array<Record<string, any>>; bindings?: string[] }) => {
         if (!state.insideSlotRender) throw new Error("Keymap.Provider is missing");
         state.layers.push(factory());
       },
@@ -120,11 +120,19 @@ describe("opencode-quota TUI plugin", () => {
   });
 
   it("registers /quota and an escape binding once the slot renders", async () => {
-    const { show, close } = await mount();
+    const { show, close, state } = await mount();
 
     expect(show?.slash).toEqual({ name: "quota", aliases: ["quota-report"] });
     expect(show?.palette).toBe(true);
     expect(close?.bind).toBe("escape");
+  });
+
+  it("activates the escape binding by listing the close command", async () => {
+    // A command's `bind` is inert unless its id appears in the layer's
+    // `bindings`, so this is what makes escape reach the plugin at all.
+    const { state } = await mount();
+
+    expect(state.layers[0]?.bindings).toEqual(["opencode-quota.close"]);
   });
 
   it("opens the dialog before the request resolves, then shows the report", async () => {

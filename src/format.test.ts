@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBar, formatLabel, formatReport, formatResetTime, formatWindowName, quotaTone } from "./format.ts";
+import { formatBar, formatLabel, formatMeta, formatReport, formatResetTime, formatWindowName, quotaTone } from "./format.ts";
 import { parseQuotaReport } from "./rpc.ts";
 import type { QuotaReport } from "./rpc.ts";
 
@@ -196,8 +196,45 @@ describe("formatBar", () => {
 });
 
 describe("formatLabel", () => {
-  it("pads short labels and truncates long ones", () => {
+  it("pads short labels and truncates only genuine overflow", () => {
     expect(formatLabel("Claude", 10)).toBe("Claude    ");
     expect(formatLabel("A very long label indeed", 10)).toBe("A very lo…");
+  });
+
+  it("does not truncate a label that exactly fills the column", () => {
+    // "Primary window" is 14 characters, which is the widest label the Codex
+    // report produces; truncating here produced "Primary windo…".
+    expect(formatLabel("Primary window", 14)).toBe("Primary window");
+    expect(formatLabel("Primary window", 14)).toHaveLength(14);
+  });
+});
+
+describe("formatMeta", () => {
+  const now = Date.parse("2026-09-27T12:00:00.000Z");
+
+  it("shows one value when the window and the reset countdown agree", () => {
+    // A Codex plan measured from its last reset: a 30-day window resetting in
+    // 30 days used to render as "30d left · 30d left".
+    const meta = formatMeta(
+      { id: "primary", label: "Primary window", remainingPercent: 73, windowMinutes: 43_200, resetTime: new Date(now + 30 * 86_400_000).toISOString() },
+      now,
+    );
+    expect(meta).toBe("30d left");
+  });
+
+  it("shows both when they differ", () => {
+    const meta = formatMeta(
+      { id: "primary", label: "Primary window", remainingPercent: 73, windowMinutes: 10_080, resetTime: new Date(now + 3 * 86_400_000).toISOString() },
+      now,
+    );
+    expect(meta).toBe("7d left · 3d left");
+  });
+
+  it("degrades cleanly when only one side is known", () => {
+    expect(formatMeta({ id: "a", label: "A", remainingPercent: 1, windowMinutes: 300 }, now)).toBe("5h window");
+    expect(
+      formatMeta({ id: "a", label: "A", remainingPercent: 1, resetTime: new Date(now + 3_600_000).toISOString() }, now),
+    ).toBe("1h left");
+    expect(formatMeta({ id: "a", label: "A", remainingPercent: 1 }, now)).toBeUndefined();
   });
 });

@@ -9,26 +9,35 @@
 
 import { createRoot, createSignal } from "solid-js";
 import { Plugin } from "@opencode/plugin/tui";
-import { QuotaRpc, parseQuotaReport, type QuotaAccount, type QuotaReport } from "./rpc.ts";
-import { formatBar, formatLabel, formatWindowName, quotaTone } from "./format.ts";
+import { QuotaRpc, parseQuotaReport, type QuotaAccount, type QuotaLine, type QuotaReport } from "./rpc.ts";
+import { formatBar, formatLabel, formatMeta, quotaTone } from "./format.ts";
 
-const BAR_WIDTH = 20;
-const LABEL_WIDTH = 26;
+const BAR_WIDTH = 12;
+const MIN_LABEL_WIDTH = 8;
+const MAX_LABEL_WIDTH = 18;
 const SPINNER_FRAMES = 10;
+const CLOSE_COMMAND_ID = "opencode-quota.close";
+const SHOW_COMMAND_ID = "opencode-quota.show";
 
 type View =
   | { status: "loading" }
   | { status: "ready"; report: QuotaReport }
   | { status: "error"; message: string };
 
-function relativeReset(iso: string, now: number): string | undefined {
-  const at = Date.parse(iso);
-  if (!Number.isFinite(at)) return undefined;
-  const minutes = Math.round((at - now) / 60_000);
-  if (minutes <= 0) return "resetting";
-  if (minutes < 60) return `resets in ${minutes}m`;
-  if (minutes < 60 * 24) return `resets in ${Math.round(minutes / 60)}h`;
-  return `resets in ${Math.round(minutes / (60 * 24))}d`;
+/** A readable account heading, never a raw storage key. */
+function accountTitle(account: QuotaAccount): string {
+  if (account.email) return account.email;
+  if (account.plan) return `${account.plan} plan`;
+  return "active account";
+}
+
+/** Widest label across the whole report so every bar starts in the same column. */
+function labelWidthFor(report: QuotaReport): number {
+  let widest = MIN_LABEL_WIDTH;
+  for (const account of report.accounts) {
+    for (const line of account.lines) widest = Math.max(widest, line.label.length);
+  }
+  return Math.min(widest, MAX_LABEL_WIDTH);
 }
 
 /** Indeterminate bar for the loading state. */
@@ -120,9 +129,9 @@ export default Plugin.define({
         });
     };
 
-    // The host's resolved theme is not resolvable from this package's types, so
-    // tokens are read defensively: an unexpected shape falls back to the two
-    // tokens the plugin guide documents, rather than rendering nothing.
+    // The host's resolved theme type is not resolvable from this package, so
+    // tokens are read defensively: an unexpected shape falls back to the
+    // documented foreground tokens instead of rendering nothing.
     const theme = context.theme as unknown as Record<string, any>;
     const text = (theme.text ?? {}) as Record<string, string | undefined>;
     const base = text.base;
@@ -141,32 +150,29 @@ export default Plugin.define({
       }
     };
 
-    const AccountBlock = (props: { account: QuotaAccount; now: number }) => {
+    const Line = (props: { line: QuotaLine; now: number; width: number }) => {
+      const meta = () => formatMeta(props.line, props.now);
+      return (
+        <box flexDirection="row">
+          <text fg={muted}>{`${formatLabel(props.line.label, props.width)} `}</text>
+          <text fg={tone(props.line.remainingPercent)}>{formatBar(props.line.remainingPercent, BAR_WIDTH)}</text>
+          <text fg={base}>{`  ${Math.round(props.line.remainingPercent)}%`}</text>
+          {meta() ? <text fg={muted} opacity={0.8}>{`  ${meta()}`}</text> : null}
+        </box>
+      );
+    };
+
+    const Account = (props: { account: QuotaAccount; now: number; width: number }) => {
       const account = () => props.account;
       return (
-        <box flexDirection="column" marginBottom={1}>
-          <text fg={muted}>{account().email ?? account().key}</text>
+        <box flexDirection="column" marginTop={1}>
+          <text fg={muted}>{accountTitle(account())}</text>
           {account().status === "disabled" ? (
             <text fg={muted} opacity={0.7}>  disabled</text>
           ) : account().status === "error" ? (
             <text fg={muted} opacity={0.7}>{`  ${account().error ?? "error"}`}</text>
           ) : (
-            account().lines.map((line) => {
-              const meta = [
-                formatWindowName(line.windowMinutes),
-                line.resetTime ? relativeReset(line.resetTime, props.now) : undefined,
-              ]
-                .filter(Boolean)
-                .join(" · ");
-              return (
-                <box flexDirection="row">
-                  <text fg={muted}>{formatLabel(line.label, LABEL_WIDTH)}</text>
-                  <text fg={tone(line.remainingPercent)}>{formatBar(line.remainingPercent, BAR_WIDTH)}</text>
-                  <text fg={base}>{` ${Math.round(line.remainingPercent)}%`}</text>
-                  {meta ? <text fg={muted} opacity={0.75}>{`  ${meta}`}</text> : null}
-                </box>
-              );
-            })
+            account().lines.map((line) => <Line line={line} now={props.now} width={props.width} />)
           )}
         </box>
       );
@@ -179,9 +185,13 @@ export default Plugin.define({
         const state = current();
         return state.status === "ready" ? state.report.generatedAt : Date.now();
       };
+      const width = () => {
+        const state = current();
+        return state.status === "ready" ? labelWidthFor(state.report) : MIN_LABEL_WIDTH;
+      };
 
       return (
-        <box flexDirection="column" paddingX={2} paddingTop={1}>
+        <box flexDirection="column" paddingLeft={4} paddingRight={4}>
           <text fg={base}>Quota</text>
 
           {(() => {
@@ -189,16 +199,15 @@ export default Plugin.define({
             if (state.status === "loading") {
               return (
                 <box flexDirection="column" marginTop={1}>
-                  <text fg={base}>{`  ${spinnerBar(props.frame())}`}</text>
-                  <text fg={muted} opacity={0.8}>  Fetching quota…</text>
+                  <text fg={base}>{`${spinnerBar(props.frame())}  fetching…`}</text>
                 </box>
               );
             }
             if (state.status === "error") {
-              return <text fg={muted}>{`  ${state.message}`}</text>;
+              return <text fg={muted}>{state.message}</text>;
             }
             if (state.report.accounts.length === 0) {
-              return <text fg={muted}>  No quota data available.</text>;
+              return <text fg={muted}>No quota data available.</text>;
             }
             return (
               <box flexDirection="column">
@@ -209,19 +218,19 @@ export default Plugin.define({
                     <box flexDirection="column" marginTop={1}>
                       <text fg={base}>{provider === "antigravity" ? "Antigravity" : "OpenAI (Codex)"}</text>
                       {group.map((account) => (
-                        <AccountBlock account={account} now={now()} />
+                        <Account account={account} now={now()} width={width()} />
                       ))}
                     </box>
                   );
                 })}
                 {state.report.notes.map((note) => (
-                  <text fg={muted} opacity={0.75}>{`  ${note}`}</text>
+                  <text fg={muted} opacity={0.8}>{note}</text>
                 ))}
               </box>
             );
           })()}
 
-          <text fg={muted} opacity={0.6} marginTop={1}>  esc to close</text>
+          <text fg={muted} opacity={0.6} marginTop={1}>esc to close</text>
         </box>
       );
     };
@@ -236,9 +245,10 @@ export default Plugin.define({
       render: () => {
         context.keymap.layer(() => ({
           mode: "global",
+          priority: 20,
           commands: [
             {
-              id: "opencode-quota.show",
+              id: SHOW_COMMAND_ID,
               title: "Quota",
               description: "Show remaining quota for connected accounts",
               group: "opencode-quota",
@@ -247,7 +257,7 @@ export default Plugin.define({
               run: open,
             },
             {
-              id: "opencode-quota.close",
+              id: CLOSE_COMMAND_ID,
               title: "Close quota",
               group: "opencode-quota",
               bind: "escape",
@@ -261,6 +271,9 @@ export default Plugin.define({
               },
             },
           ],
+          // A command's `bind` is inert unless its id is listed here, which is
+          // why listing the close command is what makes escape reach it.
+          bindings: [CLOSE_COMMAND_ID],
         }));
         return null;
       },
