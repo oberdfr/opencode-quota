@@ -141,19 +141,19 @@ export function shortWindow(minutes: number | undefined): string | undefined {
 }
 
 /**
- * Trailing detail for a row, e.g. `5h left · 3d left`.
+ * Trailing detail for a row.
  *
- * When the window length and the reset countdown agree, as they do for a Codex
- * plan whose window is measured from the last reset, only one is shown. Printing
- * "30d left · 30d left" reads like a rendering bug.
+ * The reset countdown is the actionable figure, so it is what is shown; the
+ * window length only appears when the provider gives no reset time. Printing
+ * both produced rows like "30d left · 29d left", where the first number is the
+ * window length rather than something left, and it pushed the row past the
+ * dialog width.
  */
 export function formatMeta(line: QuotaLine, now: number): string | undefined {
-  const window = shortWindow(line.windowMinutes);
   const reset = shortReset(line.resetTime, now);
-  if (window && reset) return window === reset ? `${reset} left` : `${window} left · ${reset} left`;
-  if (window) return `${window} window`;
   if (reset) return `${reset} left`;
-  return undefined;
+  const window = shortWindow(line.windowMinutes);
+  return window ? `${window} window` : undefined;
 }
 
 /**
@@ -168,4 +168,50 @@ export function rowWidth(line: QuotaLine, now: number, labelWidth: number, barWi
   const meta = formatMeta(line, now);
   // label + gap + bar + two spaces + percentage + two spaces + optional meta
   return labelWidth + 1 + barWidth + 2 + `${Math.round(line.remainingPercent)}%`.length + (meta ? 2 + meta.length : 0);
+}
+
+/** Line ids of the two Antigravity Gemini allowances, as reported by its RPC. */
+export const GEMINI_GROUP_IDS = ["antigravity:gemini-pro", "antigravity:gemini-flash"] as const;
+
+/**
+ * Collapses the Gemini Pro and Gemini Flash allowances into a single line.
+ *
+ * The two allowances are tracked separately all the way down: the RPC still
+ * reports each one, and they are merged only for display. The merged value is
+ * the lower of the two, so the bar reflects whichever allowance is tighter if
+ * they ever diverge, and it takes the sooner reset for the same reason.
+ *
+ * The merged line takes the position of the first Gemini line so ordering in
+ * the report is otherwise preserved. Any other line is passed through untouched.
+ */
+export function mergeGeminiAllowances(lines: readonly QuotaLine[]): QuotaLine[] {
+  const isGemini = (id: string) => (GEMINI_GROUP_IDS as readonly string[]).includes(id);
+  const gemini = lines.filter((line) => isGemini(line.id));
+  if (gemini.length < 2) return [...lines];
+
+  const resets = gemini
+    .map((line) => line.resetTime)
+    .filter((value): value is string => typeof value === "string")
+    .sort();
+
+  const merged: QuotaLine = {
+    id: "antigravity:gemini",
+    label: "Gemini",
+    remainingPercent: Math.min(...gemini.map((line) => line.remainingPercent)),
+    ...(resets[0] ? { resetTime: resets[0] } : {}),
+  };
+
+  const out: QuotaLine[] = [];
+  let inserted = false;
+  for (const line of lines) {
+    if (!isGemini(line.id)) {
+      out.push(line);
+      continue;
+    }
+    if (!inserted) {
+      out.push(merged);
+      inserted = true;
+    }
+  }
+  return out;
 }

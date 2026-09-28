@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { formatBar, formatLabel, formatMeta, formatReport, formatResetTime, formatWindowName, quotaTone } from "./format.ts";
+import {
+  formatBar,
+  formatLabel,
+  formatMeta,
+  formatReport,
+  formatResetTime,
+  formatWindowName,
+  mergeGeminiAllowances,
+  quotaTone,
+} from "./format.ts";
 import { parseQuotaReport } from "./rpc.ts";
 import type { QuotaReport } from "./rpc.ts";
 
@@ -222,12 +231,14 @@ describe("formatMeta", () => {
     expect(meta).toBe("30d left");
   });
 
-  it("shows both when they differ", () => {
+  it("prefers the reset countdown over the window length", () => {
+    // Showing both produced "30d left · 29d left", where the first number is the
+    // window length and not something remaining.
     const meta = formatMeta(
-      { id: "primary", label: "Primary window", remainingPercent: 73, windowMinutes: 10_080, resetTime: new Date(now + 3 * 86_400_000).toISOString() },
+      { id: "primary", label: "Primary window", remainingPercent: 73, windowMinutes: 43_200, resetTime: new Date(now + 29 * 86_400_000).toISOString() },
       now,
     );
-    expect(meta).toBe("7d left · 3d left");
+    expect(meta).toBe("29d left");
   });
 
   it("degrades cleanly when only one side is known", () => {
@@ -236,5 +247,47 @@ describe("formatMeta", () => {
       formatMeta({ id: "a", label: "A", remainingPercent: 1, resetTime: new Date(now + 3_600_000).toISOString() }, now),
     ).toBe("1h left");
     expect(formatMeta({ id: "a", label: "A", remainingPercent: 1 }, now)).toBeUndefined();
+  });
+});
+
+describe("mergeGeminiAllowances", () => {
+  const claude = { id: "antigravity:claude", label: "Claude", remainingPercent: 12 };
+  const pro = { id: "antigravity:gemini-pro", label: "Gemini Pro", remainingPercent: 34, resetTime: "2026-09-30T16:29:32Z" };
+  const flash = { id: "antigravity:gemini-flash", label: "Gemini Flash", remainingPercent: 34, resetTime: "2026-09-29T10:00:00Z" };
+
+  it("collapses Pro and Flash into one Gemini line", () => {
+    const merged = mergeGeminiAllowances([claude, pro, flash]);
+
+    expect(merged.map((line) => line.label)).toEqual(["Claude", "Gemini"]);
+    expect(merged[1]).toMatchObject({ id: "antigravity:gemini", label: "Gemini", remainingPercent: 34 });
+  });
+
+  it("keeps the lower allowance and the sooner reset", () => {
+    const merged = mergeGeminiAllowances([
+      { ...pro, remainingPercent: 34 },
+      { ...flash, remainingPercent: 9, resetTime: "2026-09-28T10:00:00Z" },
+    ]);
+
+    expect(merged[0]?.remainingPercent).toBe(9);
+    expect(merged[0]?.resetTime).toBe("2026-09-28T10:00:00Z");
+  });
+
+  it("takes the position of the first Gemini line", () => {
+    const merged = mergeGeminiAllowances([flash, claude, pro]);
+    expect(merged.map((line) => line.label)).toEqual(["Gemini", "Claude"]);
+  });
+
+  it("passes other providers and lone Gemini lines through untouched", () => {
+    const codex = { id: "primary", label: "Primary window", remainingPercent: 73 };
+    expect(mergeGeminiAllowances([codex])).toEqual([codex]);
+    // Only one of the two present: nothing to merge, so it is left alone.
+    expect(mergeGeminiAllowances([pro])).toEqual([pro]);
+  });
+
+  it("does not mutate its input", () => {
+    const input = [claude, pro, flash];
+    const snapshot = JSON.parse(JSON.stringify(input));
+    mergeGeminiAllowances(input);
+    expect(input).toEqual(snapshot);
   });
 });

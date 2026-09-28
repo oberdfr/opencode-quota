@@ -10,7 +10,7 @@
 import { createRoot, createSignal } from "solid-js";
 import { Plugin } from "@opencode/plugin/tui";
 import { QuotaRpc, parseQuotaReport, type QuotaAccount, type QuotaLine, type QuotaReport } from "./rpc.ts";
-import { formatBar, formatLabel, formatMeta, quotaTone } from "./format.ts";
+import { formatBar, formatLabel, formatMeta, mergeGeminiAllowances, quotaTone } from "./format.ts";
 
 const BAR_WIDTH = 12;
 const MIN_LABEL_WIDTH = 8;
@@ -29,15 +29,6 @@ function accountTitle(account: QuotaAccount): string {
   if (account.email) return account.email;
   if (account.plan) return `${account.plan} plan`;
   return "active account";
-}
-
-/** Widest label across the whole report so every bar starts in the same column. */
-function labelWidthFor(report: QuotaReport): number {
-  let widest = MIN_LABEL_WIDTH;
-  for (const account of report.accounts) {
-    for (const line of account.lines) widest = Math.max(widest, line.label.length);
-  }
-  return Math.min(widest, MAX_LABEL_WIDTH);
 }
 
 /** Indeterminate bar for the loading state. */
@@ -178,6 +169,9 @@ export default Plugin.define({
 
     const Account = (props: { account: QuotaAccount; now: number; width: number }) => {
       const account = () => props.account;
+      // Gemini Pro and Flash are still tracked and reported separately; they are
+      // only collapsed for display.
+      const lines = () => mergeGeminiAllowances(account().lines);
       return (
         <box flexDirection="column" marginTop={1}>
           <text fg={muted}>{accountTitle(account())}</text>
@@ -186,7 +180,7 @@ export default Plugin.define({
           ) : account().status === "error" ? (
             <text fg={muted} opacity={0.7}>{`  ${account().error ?? "error"}`}</text>
           ) : (
-            account().lines.map((line) => <Line line={line} now={props.now} width={props.width} />)
+            lines().map((line) => <Line line={line} now={props.now} width={props.width} />)
           )}
         </box>
       );
@@ -201,7 +195,16 @@ export default Plugin.define({
       };
       const width = () => {
         const state = current();
-        return state.status === "ready" ? labelWidthFor(state.report) : MIN_LABEL_WIDTH;
+        if (state.status !== "ready") return MIN_LABEL_WIDTH;
+        // Measure the width from what is actually displayed, so merging the
+        // Gemini allowances does not leave a column sized for a hidden label.
+        const widest = state.report.accounts.reduce((max, account) => {
+          return Math.max(
+            max,
+            ...mergeGeminiAllowances(account.lines).map((line) => line.label.length),
+          );
+        }, MIN_LABEL_WIDTH);
+        return Math.min(widest, MAX_LABEL_WIDTH);
       };
 
       return (
@@ -209,6 +212,15 @@ export default Plugin.define({
           flexDirection="column"
           paddingLeft={4}
           paddingRight={4}
+          paddingBottom={1}
+          // Halfway between none and a whole cell. Padding is measured in whole
+          // cells, so an integer cannot express "a little": 0 leaves the title
+          // against the panel edge and 1 pushes it a full line down. Yoga
+          // resolves a percentage against the containing block's width, and a
+          // terminal cell is about twice as tall as it is wide, so on a ~60
+          // column dialog one row of vertical space is roughly 3.3%. This sits
+          // between the two at about three quarters of a row.
+          paddingTop="2.5%"
           // Second, independent way out. A custom dialog owns its own dismissal,
           // so the dialog's root renderable takes focus and closes on escape
           // directly. This does not rely on the host delivering keys to plugin
@@ -256,7 +268,7 @@ export default Plugin.define({
             );
           })()}
 
-          <text fg={muted} opacity={0.6} marginTop={1}>esc to close</text>
+          <text fg={muted} opacity={0.6} marginTop={2}>esc to close</text>
         </box>
       );
     };

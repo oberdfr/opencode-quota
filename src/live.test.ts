@@ -126,12 +126,12 @@ describe("compact metadata", () => {
     expect(shortReset(undefined, now)).toBeUndefined();
   });
 
-  it("joins the parts into a single trailing detail", () => {
+  it("uses the reset countdown as the single trailing detail", () => {
     const meta = formatMeta(
       { id: "primary", label: "Primary window", remainingPercent: 73, windowMinutes: 10_080, resetTime: new Date(now + 30 * 86_400_000).toISOString() },
       now,
     );
-    expect(meta).toBe("7d left · 30d left");
+    expect(meta).toBe("30d left");
   });
 
   it("omits metadata entirely when the provider reports none", () => {
