@@ -24,8 +24,6 @@ export default Plugin.define({
         report = `Could not read quota: ${error instanceof Error ? error.message : String(error)}`;
       }
 
-      // The dialog render is deferred so the freshly awaited text is in scope
-      // when Solid first evaluates it.
       context.ui.dialog.set({ size: "large", centered: true });
       context.ui.dialog.show(
         () => (
@@ -38,19 +36,30 @@ export default Plugin.define({
       );
     };
 
-    context.keymap.layer(() => ({
-      mode: "global",
-      commands: [
-        {
-          id: "opencode-quota.show",
-          title: "Quota",
-          description: "Show remaining quota for connected accounts",
-          group: "opencode-quota",
-          palette: true,
-          slash: { name: "quota", aliases: ["quota-report"] },
-          run: show,
-        },
-      ],
-    }));
+    // The keymap layer must be created from inside the app's render tree: the
+    // host keeps its keymap state in a reactive context, and reaching for it
+    // during setup runs outside that tree and fails with "Keymap.Provider is
+    // missing". Claiming an `app` slot places this render inside the tree, and
+    // the returned disposer removes the slot when the plugin unloads.
+    return context.ui.slot({
+      append: "app",
+      render: () => {
+        context.keymap.layer(() => ({
+          mode: "global",
+          commands: [
+            {
+              id: "opencode-quota.show",
+              title: "Quota",
+              description: "Show remaining quota for connected accounts",
+              group: "opencode-quota",
+              palette: true,
+              slash: { name: "quota", aliases: ["quota-report"] },
+              run: show,
+            },
+          ],
+        }));
+        return null;
+      },
+    });
   },
 });
