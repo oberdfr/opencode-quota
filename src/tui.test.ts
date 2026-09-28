@@ -90,10 +90,12 @@ describe("opencode-quota TUI plugin", () => {
     const { default: plugin } = await import("./tui.tsx");
     const { context, state } = createContext();
 
-    const cleanup = plugin.setup(context);
+    // setup may return a cleanup synchronously or wrapped in a promise, so it is
+    // awaited before being invoked.
+    const cleanup = await plugin.setup(context);
     expect(state.disposed).toBe(false);
 
-    cleanup?.();
+    if (typeof cleanup === "function") cleanup();
     expect(state.disposed).toBe(true);
   });
 });
