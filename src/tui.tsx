@@ -9,20 +9,90 @@
 
 import { createRoot, createSignal } from "solid-js";
 import { Plugin } from "@opencode/plugin/tui";
-import { QuotaRpc, parseQuotaReport, type QuotaAccount, type QuotaLine, type QuotaReport } from "./rpc.ts";
-import { formatBar, formatLabel, formatMeta, mergeGeminiAllowances, quotaTone } from "./format.ts";
+import {
+  QuotaRpc,
+  parseQuotaReport,
+  type QuotaAccount,
+  type QuotaLine,
+  type QuotaProvider,
+  type QuotaReport,
+} from "./rpc.ts";
+import {
+  COLUMN_GAP,
+  formatBar,
+  formatLabel,
+  formatMeta,
+  mergeGeminiAllowances,
+  pairedLayout,
+  quotaTone,
+  showProviderSpinner,
+  splitPairedLines,
+  strong,
+} from "./format.ts";
 
+/**
+ * Characters available for a row once the dialog's left and right padding are
+ * taken off.
+ *
+ * A row wider than this wraps, which leaves a stray bar fragment on the line
+ * below. This is an estimate of what the `xlarge` dialog leaves after padding:
+ * it could not be measured from here, so the paired layout treats it as a
+ * best guess and falls back to one allowance per row whenever the pair does not
+ * fit, rather than trusting it.
+ */
+const CONTENT_BUDGET = 76;
 const BAR_WIDTH = 12;
 const MIN_LABEL_WIDTH = 8;
 const MAX_LABEL_WIDTH = 18;
 const SPINNER_FRAMES = 10;
 const CLOSE_COMMAND_ID = "opencode-quota.close";
 const SHOW_COMMAND_ID = "opencode-quota.show";
+const REFRESH_COMMAND_ID = "opencode-quota.refresh";
 
-type View =
-  | { status: "loading" }
-  | { status: "ready"; report: QuotaReport }
-  | { status: "error"; message: string };
+/**
+ * How long one provider gets before it is reported as failed.
+ *
+ * Without this a request that never settles leaves the section on its loading
+ * bar forever, with no way to tell a slow provider from a dead one. Cached
+ * numbers stay on screen either way, so timing out costs a retry, not data.
+ *
+ * Deliberately longer than the server side timeout for the Antigravity call, so
+ * a stalled read is reported by whoever can explain it rather than here.
+ */
+const REQUEST_TIMEOUT_MS = 40_000;
+
+const PROVIDERS: readonly QuotaProvider[] = ["antigravity", "openai"];
+
+const PROVIDER_TITLES: Record<QuotaProvider, string> = {
+  antigravity: "Antigravity",
+  openai: "OpenAI (Codex)",
+};
+
+/**
+ * One provider's section.
+ *
+ * `report` and `refreshing` are tracked separately rather than as a status union
+ * so that a provider can show the numbers it already has while a newer reading
+ * is on the way, which is what makes `/quota` able to refresh without the dialog
+ * going blank.
+ */
+interface Section {
+  /** Last report that arrived, or null if this provider has never answered. */
+  report: QuotaReport | null;
+  /** Why the last attempt failed, if it did. */
+  error: string | null;
+  /** Whether a request for this provider is currently in flight. */
+  refreshing: boolean;
+}
+
+type View = Record<QuotaProvider, Section>;
+
+function initialView(cached: Record<QuotaProvider, QuotaReport | null>, refreshing: boolean): View {
+  return {
+    antigravity: { report: cached.antigravity, error: null, refreshing },
+    openai: { report: cached.openai, error: null, refreshing },
+  };
+}
 
 /** A readable account heading, never a raw storage key. */
 function accountTitle(account: QuotaAccount): string {
@@ -37,6 +107,38 @@ function spinnerBar(frame: number): string {
   return `${"░".repeat(head - 1)}█${"░".repeat(Math.max(0, BAR_WIDTH - head))}`;
 }
 
+/**
+ * Bold text for use as a `text` child.
+ *
+ * The chunk helper is the supported way to style a run of text, and the
+ * renderable takes a chunk at runtime, but the published child type only admits
+ * primitives, so the cast is confined to this one helper.
+ */
+/** Small spinner shown beside a provider that already has data on screen. */
+function spinnerTick(frame: number): string {
+  return "|/-\\"[frame % 4] as string;
+}
+
+/**
+ * Fails a request that never settles, so one stalled provider cannot leave the
+ * dialog waiting forever.
+ */
+function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
+}
+
 export default Plugin.define({
   id: "opencode-quota.tui",
   setup(context) {
@@ -45,16 +147,15 @@ export default Plugin.define({
     // a property. A wrapper object is used because the store's value type is
     // constrained to non-null.
     const [cache, patchCache] = context.storage.memory("report", {
-      initial: { report: null as QuotaReport | null },
+      initial: { antigravity: null as QuotaReport | null, openai: null as QuotaReport | null },
     });
 
     // Live view state, owned by a Solid root created on open and disposed on
     // close so the dialog re-renders in place rather than being torn down and
-    // rebuilt while the request is in flight.
+    // rebuilt while a request is in flight.
     let readView: (() => View) | undefined;
-    let writeView: ((next: View) => void) | undefined;
+    let writeView: ((next: View | ((view: View) => View)) => void) | undefined;
     let disposeRoot: (() => void) | undefined;
-    let spinner: ReturnType<typeof setInterval> | undefined;
     const [frame, setFrame] = createSignal(0);
     // Whether a quota dialog is on screen.
     //
@@ -65,16 +166,27 @@ export default Plugin.define({
     // unreliable, so the binding is registered unconditionally and the state is
     // checked here instead, where it is always live.
     let dialogIsOpen = false;
+    // The spinner only ticks while something is in flight, so an idle dialog
+    // costs nothing.
+    let ticker: ReturnType<typeof setInterval> | undefined;
+
+    const stopTicker = () => {
+      if (ticker === undefined) return;
+      clearInterval(ticker);
+      ticker = undefined;
+    };
+
+    const startTickerIfIdle = () => {
+      if (ticker !== undefined) return;
+      ticker = setInterval(() => setFrame((n) => n + 1), 90);
+    };
 
     const close = () => {
       // Guarded so an escape press that lands with no quota dialog on screen
       // cannot clear a dialog belonging to something else.
       if (!dialogIsOpen) return;
       dialogIsOpen = false;
-      if (spinner !== undefined) {
-        clearInterval(spinner);
-        spinner = undefined;
-      }
+      stopTicker();
       if (disposeRoot) {
         disposeRoot();
         disposeRoot = undefined;
@@ -88,50 +200,110 @@ export default Plugin.define({
       }
     };
 
+    /**
+     * Monotonic counter identifying the newest refresh, so a request that
+     * resolves after a retry cannot revert the dialog to older numbers.
+     */
+    let latestGeneration = 0;
+
+    /**
+     * Asks the server for both providers and updates each section as it lands.
+     *
+     * Safe to call again while a request is in flight, which is what the refresh
+     * control does: the newest answer wins and an earlier one that arrives late
+     * is ignored, so a slow first request cannot overwrite a faster retry.
+     */
+    const refresh = () => {
+      if (!dialogIsOpen) return;
+      const apply = writeView;
+      if (!apply) return;
+
+      // Each provider gets its own request generation. Only the newest one may
+      // write, so an in-flight request that resolves after a retry is dropped
+      // instead of reverting the dialog to older numbers.
+      const generation = (latestGeneration += 1);
+      const isCurrent = () => latestGeneration === generation;
+
+      apply((view) => ({
+        antigravity: { ...view.antigravity, refreshing: true },
+        openai: { ...view.openai, refreshing: true },
+      }));
+      startTickerIfIdle();
+
+      for (const provider of PROVIDERS) {
+        const label = PROVIDER_TITLES[provider];
+        // The call is wrapped so a synchronous throw is handled like a rejection:
+        // letting it escape would skip the handlers below and leave the section
+        // on its loading bar for good.
+        let request: Promise<unknown>;
+        try {
+          request = Promise.resolve(quota.report({ provider }));
+        } catch (error: unknown) {
+          request = Promise.reject(error instanceof Error ? error : new Error(String(error)));
+        }
+
+        void withTimeout(request, REQUEST_TIMEOUT_MS, label)
+          .then((result) => {
+            if (!isCurrent() || !dialogIsOpen) return;
+            const report = parseQuotaReport(result);
+            patchCache((draft) => {
+              draft[provider] = report;
+            });
+            apply((view) => ({
+              ...view,
+              [provider]: { report, error: null, refreshing: false },
+            }));
+          })
+          .catch((error: unknown) => {
+            if (!isCurrent() || !dialogIsOpen) return;
+            const message = error instanceof Error ? error.message : String(error);
+            // A provider that already has numbers keeps showing them: the point
+            // of the cache is that a failed refresh does not blank the dialog.
+            apply((view) => ({
+              ...view,
+              [provider]: { ...view[provider], error: message, refreshing: false },
+            }));
+          })
+          .finally(() => {
+            if (!isCurrent()) return;
+            if (readView && !Object.values(readView()).some((section) => section.refreshing)) {
+              stopTicker();
+            }
+          });
+      }
+    };
+
     const open = () => {
-      // Ignore a second /quota while one is already on screen.
-      if (dialogIsOpen) return;
+      // Ignore a second /quota while one is already on screen: the dialog is
+      // already showing the data, and `refresh` is the way to ask again.
+      if (dialogIsOpen) {
+        refresh();
+        return;
+      }
       dialogIsOpen = true;
 
-      const cached = cache.report;
+      const cached = { antigravity: cache.antigravity, openai: cache.openai };
       // createRoot passes its disposer to the callback, so the root can be torn
       // down later to release the signals it owns.
       disposeRoot = createRoot((dispose) => {
-        const [signal, setSignal] = createSignal<View>(
-          cached ? { status: "ready", report: cached } : { status: "loading" },
-        );
+        // Any cached report is on screen from the first frame, and the sections
+        // start out refreshing so the spinner appears immediately.
+        const [signal, setSignal] = createSignal<View>(initialView(cached, true));
         readView = signal;
         writeView = setSignal;
         return dispose;
       });
 
-      // A fresh fetch always runs; the cache only decides what the first frame shows.
-      spinner = setInterval(() => setFrame((n) => n + 1), 90);
-
-      context.ui.dialog.set({ size: "large", centered: true });
+      // xlarge: the subscription row puts two allowances side by side, which does not
+      // fit the narrower sizes without shrinking the bars past readability.
+      context.ui.dialog.set({ size: "xlarge", centered: true });
       context.ui.dialog.show(
         () => <QuotaView read={readView!} frame={frame} />,
         () => close(),
       );
 
-      void quota
-        .report({})
-        .then((result) => {
-          const report = parseQuotaReport(result);
-          patchCache((draft) => {
-            draft.report = report;
-          });
-          writeView?.({ status: "ready", report });
-        })
-        .catch((error: unknown) => {
-          writeView?.({ status: "error", message: error instanceof Error ? error.message : String(error) });
-        })
-        .finally(() => {
-          if (spinner !== undefined) {
-            clearInterval(spinner);
-            spinner = undefined;
-          }
-        });
+      // Always a fresh read: the cache only decides what the first frame shows.
+      refresh();
     };
 
     // The host's resolved theme type is not resolvable from this package, so
@@ -155,12 +327,16 @@ export default Plugin.define({
       }
     };
 
-    const Line = (props: { line: QuotaLine; now: number; width: number }) => {
+    /** One allowance's label, bar, percentage and trailing detail. */
+    const Allowance = (props: { line: QuotaLine; now: number; width: number; barWidth?: number; gap?: number }) => {
       const meta = () => formatMeta(props.line, props.now);
+      const lead = props.gap ? " ".repeat(props.gap) : "";
       return (
         <box flexDirection="row">
-          <text fg={muted}>{`${formatLabel(props.line.label, props.width)} `}</text>
-          <text fg={tone(props.line.remainingPercent)}>{formatBar(props.line.remainingPercent, BAR_WIDTH)}</text>
+          <text fg={muted}>{`${lead}${formatLabel(props.line.label, props.width)} `}</text>
+          <text fg={tone(props.line.remainingPercent)}>
+            {formatBar(props.line.remainingPercent, props.barWidth ?? BAR_WIDTH)}
+          </text>
           <text fg={base}>{`  ${Math.round(props.line.remainingPercent)}%`}</text>
           {meta() ? <text fg={muted} opacity={0.8}>{`  ${meta()}`}</text> : null}
         </box>
@@ -172,40 +348,118 @@ export default Plugin.define({
       // Gemini Pro and Flash are still tracked and reported separately; they are
       // only collapsed for display.
       const lines = () => mergeGeminiAllowances(account().lines);
+      // Allowances that are two halves of one budget share a row, so the two
+      // limits of a subscription can be read against each other.
+      const grouped = () => splitPairedLines(lines());
+      const layout = () =>
+        pairedLayout(grouped().paired, MIN_LABEL_WIDTH, MAX_LABEL_WIDTH, BAR_WIDTH, CONTENT_BUDGET);
+      // Only pair them when the row genuinely fits; otherwise they stack, since a
+      // wrapped pair leaves a fragment of the second bar on the line below.
+      const sideBySide = () => grouped().paired.length > 1 && layout() !== undefined;
       return (
         <box flexDirection="column" marginTop={1}>
-          <text fg={muted}>{accountTitle(account())}</text>
+          <box flexDirection="row" gap={1}>
+            <text fg={muted}>{accountTitle(account())}</text>
+            {/* Names the plan, so a paid account is recognisable as one. */}
+            {account().subscription ? (
+              <text fg={base} opacity={0.7}>{`(${account().subscription})`}</text>
+            ) : null}
+          </box>
           {account().status === "disabled" ? (
             <text fg={muted} opacity={0.7}>  disabled</text>
           ) : account().status === "error" ? (
             <text fg={muted} opacity={0.7}>{`  ${account().error ?? "error"}`}</text>
+          ) : sideBySide() ? (
+            <>
+              <box flexDirection="row">
+                {grouped().paired.map((line, index) => (
+                  <Allowance
+                    line={line}
+                    now={props.now}
+                    width={layout()?.labelWidth ?? props.width}
+                    barWidth={layout()?.barWidth}
+                    gap={index === 0 ? undefined : COLUMN_GAP}
+                  />
+                ))}
+              </box>
+              {grouped().stacked.map((line) => (
+                <Allowance line={line} now={props.now} width={props.width} />
+              ))}
+            </>
           ) : (
-            lines().map((line) => <Line line={line} now={props.now} width={props.width} />)
+            lines().map((line) => <Allowance line={line} now={props.now} width={props.width} />)
           )}
+        </box>
+      );
+    };
+
+    /** Body of one provider section. */
+    const SectionBody = (props: { section: Section; now: number; width: number; frameRef: () => number }) => {
+      const section = () => props.section;
+      const report = section().report;
+
+      if (!report) {
+        if (section().refreshing) {
+          // Each provider gets its own bar, so a slow one shows its own progress
+          // instead of blanking the whole dialog.
+          return <text fg={muted}>{`${spinnerBar(props.frameRef())} fetching…`}</text>;
+        }
+        return (
+          <text fg={muted} opacity={0.8}>
+            {section().error ?? "No quota data available."}
+          </text>
+        );
+      }
+
+      if (report.accounts.length === 0) {
+        return (
+          <text fg={muted} opacity={0.8}>
+            {section().error ?? report.notes[0] ?? "No quota data available."}
+          </text>
+        );
+      }
+
+      return (
+        <box flexDirection="column">
+          {report.accounts.map((account) => (
+            <Account account={account} now={props.now} width={props.width} />
+          ))}
+          {report.notes.map((note) => (
+            <text fg={muted} opacity={0.8}>{note}</text>
+          ))}
+          {section().error ? (
+            <text fg={muted} opacity={0.8}>{`refresh failed: ${section().error}`}</text>
+          ) : null}
         </box>
       );
     };
 
     const QuotaView = (props: { read: () => View; frame: () => number }) => {
       const current = () => props.read();
-      // Read once so the union narrows; a second call would be untyped again.
+      const frameRef = () => props.frame();
+      /** Newest report timestamp across the providers that have landed. */
       const now = () => {
-        const state = current();
-        return state.status === "ready" ? state.report.generatedAt : Date.now();
+        const stamps = PROVIDERS.flatMap((provider) => {
+          const report = current()[provider].report;
+          return report ? [report.generatedAt] : [];
+        });
+        return stamps.length > 0 ? Math.max(...stamps) : Date.now();
       };
       const width = () => {
-        const state = current();
-        if (state.status !== "ready") return MIN_LABEL_WIDTH;
         // Measure the width from what is actually displayed, so merging the
         // Gemini allowances does not leave a column sized for a hidden label.
-        const widest = state.report.accounts.reduce((max, account) => {
-          return Math.max(
-            max,
-            ...mergeGeminiAllowances(account.lines).map((line) => line.label.length),
-          );
-        }, MIN_LABEL_WIDTH);
-        return Math.min(widest, MAX_LABEL_WIDTH);
+        const accounts = PROVIDERS.flatMap((provider) => {
+          const report = current()[provider].report;
+          return report ? report.accounts : [];
+        });
+        const max = accounts.reduce(
+          (acc, account) =>
+            Math.max(acc, ...mergeGeminiAllowances(account.lines).map((line) => line.label.length)),
+          MIN_LABEL_WIDTH,
+        );
+        return Math.min(max, MAX_LABEL_WIDTH);
       };
+      const anyRefreshing = () => PROVIDERS.some((provider) => current()[provider].refreshing);
 
       return (
         <box
@@ -213,14 +467,9 @@ export default Plugin.define({
           paddingLeft={4}
           paddingRight={4}
           paddingBottom={1}
-          // Halfway between none and a whole cell. Padding is measured in whole
-          // cells, so an integer cannot express "a little": 0 leaves the title
-          // against the panel edge and 1 pushes it a full line down. Yoga
-          // resolves a percentage against the containing block's width, and a
-          // terminal cell is about twice as tall as it is wide, so on a ~60
-          // column dialog one row of vertical space is roughly 3.3%. This sits
-          // between the two at about three quarters of a row.
-          paddingTop="2.5%"
+          // No top padding: the first section brings its own spacing with the
+          // marginTop on the provider blocks below.
+          paddingTop={0}
           // Second, independent way out. A custom dialog owns its own dismissal,
           // so the dialog's root renderable takes focus and closes on escape
           // directly. This does not rely on the host delivering keys to plugin
@@ -230,45 +479,58 @@ export default Plugin.define({
             if (event.name === "escape") close();
           }}
         >
-          <text fg={base}>Quota</text>
+          {/* Header: title on the left, the dismiss hint on the right. */}
+          <box flexDirection="row" justifyContent="space-between">
+            <text fg={base}>{strong("Quota")}</text>
+            <text
+              fg={muted}
+              onMouseDown={(event: unknown) => {
+                (event as { stopPropagation?: () => void }).stopPropagation?.();
+                close();
+              }}
+            >
+              esc
+            </text>
+          </box>
 
-          {(() => {
-            const state = current();
-            if (state.status === "loading") {
+          <box marginTop={-1}>
+            {PROVIDERS.map((provider) => {
+              const section = current()[provider];
               return (
-                <box flexDirection="column" marginTop={1}>
-                  <text fg={base}>{`${spinnerBar(props.frame())}  fetching…`}</text>
+                <box flexDirection="column" marginTop={2}>
+                  <box flexDirection="row" gap={1}>
+                    <text fg={base}>{strong(PROVIDER_TITLES[provider])}</text>
+                    {/* The provider's own marker, so it is clear which section is
+                      being re-read rather than the whole dialog. */}
+                    {showProviderSpinner(section.refreshing, section.report !== null) ? (
+                      <text fg={muted}>{spinnerTick(props.frame())}</text>
+                    ) : null}
+                  </box>
+                  <SectionBody
+                    section={section}
+                    now={now()}
+                    width={width()}
+                    frameRef={frameRef}
+                  />
                 </box>
               );
-            }
-            if (state.status === "error") {
-              return <text fg={muted}>{state.message}</text>;
-            }
-            if (state.report.accounts.length === 0) {
-              return <text fg={muted}>No quota data available.</text>;
-            }
-            return (
-              <box flexDirection="column">
-                {(["antigravity", "openai"] as const).map((provider) => {
-                  const group = state.report.accounts.filter((account) => account.provider === provider);
-                  if (group.length === 0) return null;
-                  return (
-                    <box flexDirection="column" marginTop={1}>
-                      <text fg={base}>{provider === "antigravity" ? "Antigravity" : "OpenAI (Codex)"}</text>
-                      {group.map((account) => (
-                        <Account account={account} now={now()} width={width()} />
-                      ))}
-                    </box>
-                  );
-                })}
-                {state.report.notes.map((note) => (
-                  <text fg={muted} opacity={0.8}>{note}</text>
-                ))}
-              </box>
-            );
-          })()}
+            })}
+          </box>
 
-          <text fg={muted} opacity={0.6} marginTop={2}>esc to close</text>
+          {/* Footer: the refresh control, styled like the host's key hints and
+              clickable the same way. */}
+          <box flexDirection="row" marginTop={2}>
+            <text
+              fg={muted}
+              onMouseDown={(event: unknown) => {
+                (event as { stopPropagation?: () => void }).stopPropagation?.();
+                if (anyRefreshing()) return;
+                refresh();
+              }}
+            >
+              {strong("r")} to refresh
+            </text>
+          </box>
         </box>
       );
     };
@@ -295,6 +557,19 @@ export default Plugin.define({
               run: open,
             },
             {
+              id: REFRESH_COMMAND_ID,
+              title: "Refresh quota",
+              group: "opencode-quota",
+              bind: "r",
+              // No `enabled` gate, for the same reason as the close command: the
+              // host resolves `enabled` reactively and may cache the result.
+              run: () => {
+                if (!dialogIsOpen) return false;
+                refresh();
+                return false;
+              },
+            },
+            {
               id: CLOSE_COMMAND_ID,
               title: "Close quota",
               group: "opencode-quota",
@@ -312,7 +587,7 @@ export default Plugin.define({
           ],
           // A command's `bind` is inert unless its id is listed here, which is
           // why listing the close command is what makes escape reach it.
-          bindings: [CLOSE_COMMAND_ID],
+          bindings: [CLOSE_COMMAND_ID, REFRESH_COMMAND_ID],
         }));
         return null;
       },

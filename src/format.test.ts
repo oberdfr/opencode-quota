@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { bold, isStyledText, StyledText } from "@opentui/core";
 import {
   formatBar,
   formatLabel,
@@ -8,6 +9,11 @@ import {
   formatWindowName,
   mergeGeminiAllowances,
   quotaTone,
+  pairedLayout,
+  showProviderSpinner,
+  splitPairedLines,
+  strong,
+  windowKind,
 } from "./format.ts";
 import { parseQuotaReport } from "./rpc.ts";
 import type { QuotaReport } from "./rpc.ts";
@@ -289,5 +295,155 @@ describe("mergeGeminiAllowances", () => {
     const snapshot = JSON.parse(JSON.stringify(input));
     mergeGeminiAllowances(input);
     expect(input).toEqual(snapshot);
+  });
+});
+
+describe("strong", () => {
+  it("produces a value the text renderable accepts", () => {
+    // `TextNodeRenderable.add` throws on anything that is not a string, another
+    // renderable, or a StyledText, and that throw only happens at render time,
+    // so this is the check that keeps it from reaching the TUI.
+    expect(isStyledText(strong("r"))).toBe(true);
+  });
+
+  it("keeps the bold attribute on the wrapped chunk", () => {
+    const [chunk] = new StyledText([bold("r")]).chunks;
+    const [wrapped] = new StyledText([bold("r")]).chunks;
+
+    expect(wrapped?.text).toBe("r");
+    expect(wrapped?.attributes).toBe(chunk?.attributes);
+    expect(wrapped?.attributes).toBeGreaterThan(0);
+  });
+
+  it("is why the bare bold chunk cannot be used directly", () => {
+    // Documents the trap: the chunk is what `bold` returns, and it is not
+    // something `add` accepts on its own.
+    expect(isStyledText(bold("r"))).toBeFalsy();
+  });
+});
+
+describe("showProviderSpinner", () => {
+  it("stays off before the first report, where the body already shows a bar", () => {
+    // Two bars appeared for one request: the title drew one and the section body
+    // drew its own "fetching…" bar.
+    expect(showProviderSpinner(true, false)).toBe(false);
+  });
+
+  it("shows a small marker once there are numbers to keep on screen", () => {
+    expect(showProviderSpinner(true, true)).toBe(true);
+  });
+
+  it("is off when nothing is in flight", () => {
+    expect(showProviderSpinner(false, false)).toBe(false);
+    expect(showProviderSpinner(false, true)).toBe(false);
+  });
+});
+
+describe("splitPairedLines", () => {
+  it("groups consecutive paired lines and leaves the rest stacked", () => {
+    const { paired, stacked } = splitPairedLines([
+      { id: "a", label: "5-hour", remainingPercent: 73, paired: true },
+      { id: "b", label: "Weekly", remainingPercent: 36, paired: true },
+      { id: "c", label: "Credits", remainingPercent: 0 },
+    ]);
+
+    expect(paired.map((l) => l.id)).toEqual(["a", "b"]);
+    expect(stacked.map((l) => l.id)).toEqual(["c"]);
+  });
+
+  it("stops grouping at the first unpaired line", () => {
+    // A later paired line after a stacked one is independent, so it must not join
+    // the first row and misrepresent itself as part of that budget.
+    const { paired, stacked } = splitPairedLines([
+      { id: "a", label: "5-hour", remainingPercent: 73, paired: true },
+      { id: "b", label: "Other", remainingPercent: 10 },
+      { id: "c", label: "Weekly", remainingPercent: 36, paired: true },
+    ]);
+
+    expect(paired.map((l) => l.id)).toEqual(["a"]);
+    expect(stacked.map((l) => l.id)).toEqual(["b", "c"]);
+  });
+
+  it("leaves an account with no paired lines entirely stacked", () => {
+    const { paired, stacked } = splitPairedLines([
+      { id: "g", label: "Gemini", remainingPercent: 100 },
+      { id: "c", label: "Claude", remainingPercent: 8 },
+    ]);
+
+    expect(paired).toEqual([]);
+    expect(stacked).toHaveLength(2);
+  });
+});
+
+describe("pairedLayout", () => {
+  const FIVE_HOUR = { id: "a", label: "5-hour", remainingPercent: 73, paired: true };
+  const WEEKLY = { id: "b", label: "1-week", remainingPercent: 36, paired: true };
+
+  it("gives both columns the same label width so the bars line up", () => {
+    const layout = pairedLayout([FIVE_HOUR, WEEKLY], 8, 18, 12, 72);
+    expect(layout?.labelWidth).toBe(8);
+  });
+
+  it("uses the full bar when the row is wide enough", () => {
+    // 8 label + 1 gap + 12 bar + 2 + "100%" + 2 + detail = 25 fixed plus the
+    // bar, twice, plus the two-space gap between: 76.
+    expect(pairedLayout([FIVE_HOUR, WEEKLY], 8, 18, 12, 76)?.barWidth).toBe(12);
+  });
+
+  it("narrows the bar rather than wrapping the row", () => {
+    // Room for the pair, but not for a full-width bar in both.
+    const layout = pairedLayout([FIVE_HOUR, WEEKLY], 8, 18, 12, 70);
+    expect(layout).toBeDefined();
+    expect(layout?.barWidth).toBeLessThan(12);
+    expect(layout?.barWidth).toBeGreaterThanOrEqual(8);
+  });
+
+  it("refuses to pair when even the narrowest bar would not fit", () => {
+    // The caller stacks instead: a wrapped pair leaves a fragment of the second
+    // bar on the line below, which reads as stray output. 68 is the narrowest
+    // width that still allows a bar of eight.
+    expect(pairedLayout([FIVE_HOUR, WEEKLY], 8, 18, 12, 56)).toBeUndefined();
+    expect(pairedLayout([FIVE_HOUR, WEEKLY], 8, 18, 12, 67)).toBeUndefined();
+    expect(pairedLayout([FIVE_HOUR, WEEKLY], 8, 18, 12, 68)).toBeDefined();
+  });
+
+  it("refuses to pair three columns in a narrow dialog", () => {
+    const three = [FIVE_HOUR, WEEKLY, { ...WEEKLY, id: "c", label: "Monthly" }];
+    expect(pairedLayout(three, 8, 18, 12, 76)).toBeUndefined();
+  });
+
+  it("caps a long label so one name cannot push the pair out of the row", () => {
+    const long = [
+      { id: "a", label: "A very long window label", remainingPercent: 50, paired: true },
+      WEEKLY,
+    ];
+    const layout = pairedLayout(long, 8, 18, 12, 200);
+    expect(layout?.labelWidth).toBe(18);
+  });
+});
+
+describe("windowKind", () => {
+  it("names a five-hour window from the hours left on it", () => {
+    // A rolling five-hour window cannot have more than five hours left.
+    expect(windowKind(60)).toBe("5-hour");
+    expect(windowKind(300)).toBe("5-hour");
+    expect(windowKind(6 * 60)).toBe("5-hour");
+  });
+
+  it("names the weekly window from the days left on it", () => {
+    expect(windowKind(5 * 24 * 60)).toBe("weekly");
+    expect(windowKind(7 * 24 * 60)).toBe("weekly");
+    expect(windowKind(166 * 60)).toBe("weekly");
+  });
+
+  it("leaves a window unnamed when the remaining time fits neither", () => {
+    // Calling a 45-hour allowance either would be a guess.
+    expect(windowKind(45 * 60)).toBeUndefined();
+    expect(windowKind(7 * 60)).toBeUndefined();
+  });
+
+  it("has nothing to say without a reset time", () => {
+    expect(windowKind(undefined)).toBeUndefined();
+    expect(windowKind(0)).toBeUndefined();
   });
 });

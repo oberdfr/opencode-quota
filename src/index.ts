@@ -16,9 +16,21 @@
 
 import { Plugin } from "@opencode/plugin";
 import type { Context } from "@opencode/plugin/promise/plugin";
-import { QuotaRpc, type QuotaAccount, type QuotaLine, type QuotaReport } from "./rpc.ts";
+import { QuotaRpc, type QuotaAccount, type QuotaLine, type QuotaProvider, type QuotaReport } from "./rpc.ts";
 import { fetchAntigravityQuota, type RpcCaller } from "./antigravity.ts";
-import { fetchCodexUsage, type CodexCredential } from "./codex.ts";
+import { fetchCodexUsage, isPaidPlan, planLabel, type CodexCredential } from "./codex.ts";
+import { windowKind } from "./format.ts";
+
+/**
+ * Whether an Antigravity plan is a paid subscription.
+ *
+ * The free tier is literally "free-tier"; everything else is a plan someone
+ * pays for, and the response names it ("Google AI Pro").
+ */
+function isPaidAntigravityPlan(subscription: { id: string; name?: string } | undefined): boolean {
+  if (!subscription) return false;
+  return subscription.id.trim().toLowerCase() !== "free-tier";
+}
 
 const PLUGIN_ID = "opencode-quota";
 const OPENAI_INTEGRATION = "openai";
@@ -94,12 +106,15 @@ async function resolveCodexCredential(ctx: Context): Promise<
   };
 }
 
-function codexAccounts(usage: Awaited<ReturnType<typeof fetchCodexUsage>>, label?: string): QuotaAccount[] {
+export function codexAccounts(usage: Awaited<ReturnType<typeof fetchCodexUsage>>, label?: string): QuotaAccount[] {
   if (!usage) return [];
 
   const lines: QuotaLine[] = [];
-  if (usage.primary) lines.push(usage.primary);
-  if (usage.secondary) lines.push(usage.secondary);
+  // The 5-hour and weekly allowances are two halves of one budget, so they are
+  // marked to be drawn side by side. A free account reports neither and just
+  // gets its one 30-day window.
+  if (usage.primary) lines.push({ ...usage.primary, paired: true });
+  if (usage.secondary) lines.push({ ...usage.secondary, paired: true });
   lines.push(...usage.additional);
 
   if (usage.hasCredits && usage.creditsBalance !== undefined) {
@@ -116,6 +131,11 @@ function codexAccounts(usage: Awaited<ReturnType<typeof fetchCodexUsage>>, label
       provider: "openai",
       ...(label ? { email: label } : {}),
       ...(usage.plan ? { plan: usage.plan } : {}),
+      // Only a paid plan is a subscription; free has the same windows minus the
+      // short ones, so the plan is the only thing that says so.
+      ...(isPaidPlan(usage.plan) && planLabel(usage.plan)
+        ? { subscription: planLabel(usage.plan) as string }
+        : {}),
       status: usage.limitReached ? "error" : "ok",
       ...(usage.limitReached ? { error: "Usage limit reached" } : {}),
       lines,
@@ -123,19 +143,28 @@ function codexAccounts(usage: Awaited<ReturnType<typeof fetchCodexUsage>>, label
   ];
 }
 
-function antigravityAccounts(result: Awaited<ReturnType<typeof fetchAntigravityQuota>>): QuotaAccount[] {
+export function antigravityAccounts(result: Awaited<ReturnType<typeof fetchAntigravityQuota>>): QuotaAccount[] {
   if (!result?.available) return [];
 
   return result.accounts.map((account) => {
     const key = account.email ?? `antigravity:${account.index}`;
-    const lines: QuotaLine[] = account.groups.map((group) => ({
+    let lines: QuotaLine[] = account.groups.map((group) => ({
       id: `antigravity:${group.id}`,
       label: group.label,
       remainingPercent: group.remainingPercent,
       ...(group.resetTime ? { resetTime: group.resetTime } : {}),
+      ...(group.windowMinutes !== undefined ? { windowMinutes: group.windowMinutes } : {}),
     }));
 
-    for (const model of account.geminiCli) {
+    // Name the window each allowance belongs to, and mark the ones that share a
+    // window so the view can set them side by side.
+    lines = lines.map((line) => {
+      const kind = windowKind(line.windowMinutes);
+      if (!kind) return line;
+      return { ...line, label: `${line.label} · ${kind}`, paired: true };
+    });
+
+  for (const model of account.geminiCli) {
       lines.push({
         id: `gemini-cli:${model.modelId}`,
         label: `Gemini CLI · ${model.modelId}`,
@@ -147,6 +176,9 @@ function antigravityAccounts(result: Awaited<ReturnType<typeof fetchAntigravityQ
     return {
       key: `antigravity:${key}`,
       provider: "antigravity",
+      ...(isPaidAntigravityPlan(account.subscription) && account.subscription?.name
+        ? { subscription: account.subscription.name }
+        : {}),
       ...(account.email ? { email: account.email } : {}),
       status: account.status === "ok" ? (account.enabled ? "ok" : "disabled") : account.status,
       ...(account.error ? { error: account.error } : {}),
@@ -160,18 +192,26 @@ export const QuotaPlugin = Plugin.define({
   async setup(ctx) {
     const options = (ctx.options ?? {}) as QuotaOptions;
 
-    const collect = async (signal?: AbortSignal): Promise<QuotaReport> => {
+    /** Collects one provider, or both when no provider is given. */
+    const collect = async (provider: QuotaProvider | undefined, signal?: AbortSignal): Promise<QuotaReport> => {
       const notes: string[] = [];
-      const [antigravity, openai] = await Promise.allSettled([
-        fetchAntigravityQuota(ctx.rpc as unknown as RpcCaller, signal),
-        resolveCodexCredential(ctx).then(async (resolved) => {
-          if (resolved && "error" in resolved) return { note: resolved.error } as const;
-          if (!resolved) return { note: "No OpenAI account connected" } as const;
-          return { usage: await fetchCodexUsage(resolved.credential, signal), label: resolved.credential.label };
-        }),
-      ]);
-
       const accounts: QuotaAccount[] = [];
+
+      const wantAntigravity = provider === undefined || provider === "antigravity";
+      const wantOpenai = provider === undefined || provider === "openai";
+
+      const antigravityTask = wantAntigravity
+        ? fetchAntigravityQuota(ctx.rpc as unknown as RpcCaller, signal)
+        : Promise.resolve(undefined);
+      const openaiTask = wantOpenai
+        ? resolveCodexCredential(ctx).then(async (resolved) => {
+            if (resolved && "error" in resolved) return { note: resolved.error } as const;
+            if (!resolved) return { note: "No OpenAI account connected" } as const;
+            return { usage: await fetchCodexUsage(resolved.credential, signal), label: resolved.credential.label };
+          })
+        : Promise.resolve(undefined);
+
+      const [antigravity, openai] = await Promise.allSettled([antigravityTask, openaiTask]);
 
       if (antigravity.status === "fulfilled" && antigravity.value) {
         accounts.push(...antigravityAccounts(antigravity.value));
@@ -182,7 +222,7 @@ export const QuotaPlugin = Plugin.define({
         notes.push("Antigravity: the opencode-antigravity-auth plugin did not answer");
       }
 
-      if (openai.status === "fulfilled") {
+      if (openai.status === "fulfilled" && openai.value) {
         if ("note" in openai.value) {
           notes.push(`OpenAI: ${openai.value.note}`);
         } else {
@@ -190,7 +230,7 @@ export const QuotaPlugin = Plugin.define({
           if (codex.length === 0) notes.push("OpenAI: no Codex quota available for this account");
           accounts.push(...codex);
         }
-      } else {
+      } else if (openai.status === "rejected") {
         notes.push(`OpenAI: ${String(openai.reason)}`);
       }
 
@@ -198,7 +238,13 @@ export const QuotaPlugin = Plugin.define({
     };
 
     const registration = await ctx.rpc.register(QuotaRpc, {
-      report: async (_input, context) => collect(context.signal),
+      report: async (input, context) => {
+        const provider = (input as { provider?: unknown } | undefined)?.provider;
+        return collect(
+          provider === "antigravity" || provider === "openai" ? (provider as QuotaProvider) : undefined,
+          context.signal,
+        );
+      },
     });
 
     if (options.observeCodexHeaders) {

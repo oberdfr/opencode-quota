@@ -17,14 +17,33 @@ export interface QuotaLine {
   resetTime?: string;
   /** How long the window runs, in minutes, when known. */
   windowMinutes?: number;
+  /**
+   * Set on allowances that are worth showing side by side rather than stacked.
+   *
+   * A Codex subscription reports a 5-hour and a weekly allowance that are two
+   * halves of one budget; comparing them in a row reads better than as two
+   * separate lines. Antigravity's buckets are independent quotas, so they are
+   * left unmarked and stay stacked.
+   */
+  paired?: boolean;
 }
+
+/** A source the terminal half can request and render on its own. */
+export type QuotaProvider = "antigravity" | "openai";
 
 export interface QuotaAccount {
   /** Stable identifier: email when known, otherwise a provider-local fallback. */
   key: string;
-  provider: "antigravity" | "openai";
+  provider: QuotaProvider;
   email?: string;
   plan?: string;
+  /**
+   * Friendly name of the paid plan, when the account is on one.
+   *
+   * Present only for subscriptions, so the view can say so without having to
+   * know which plan ids count as paid.
+   */
+  subscription?: string;
   status: "ok" | "disabled" | "error" | "unavailable";
   error?: string;
   lines: QuotaLine[];
@@ -45,6 +64,7 @@ const quotaLineSchema = {
     remainingPercent: { type: "number" },
     resetTime: { type: "string" },
     windowMinutes: { type: "number" },
+    paired: { type: "boolean" },
   },
   required: ["id", "label", "remainingPercent"],
   additionalProperties: false,
@@ -57,6 +77,7 @@ const quotaAccountSchema = {
     provider: { type: "string", enum: ["antigravity", "openai"] },
     email: { type: "string" },
     plan: { type: "string" },
+    subscription: { type: "string" },
     status: { type: "string", enum: ["ok", "disabled", "error", "unavailable"] },
     error: { type: "string" },
     lines: { type: "array", items: quotaLineSchema },
@@ -71,7 +92,11 @@ export const QuotaRpc = Rpc.define({
     report: {
       input: {
         type: "object",
-        properties: {},
+        properties: {
+          // Restrict the report to one provider. The terminal half calls this
+          // once per provider so a slow provider does not hold back a fast one.
+          provider: { type: "string", enum: ["antigravity", "openai"] },
+        },
         additionalProperties: false,
       },
       output: {
@@ -113,12 +138,14 @@ function parseLine(value: unknown): QuotaLine | undefined {
 
   const resetTime = optionalString(record?.resetTime);
   const windowMinutes = optionalNumber(record?.windowMinutes);
+  const paired = record?.paired === true ? true : undefined;
   return {
     id,
     label,
     remainingPercent,
     ...(resetTime ? { resetTime } : {}),
     ...(windowMinutes !== undefined ? { windowMinutes } : {}),
+    ...(paired ? { paired } : {}),
   };
 }
 
@@ -133,12 +160,14 @@ function parseAccount(value: unknown): QuotaAccount | undefined {
 
   const email = optionalString(record?.email);
   const plan = optionalString(record?.plan);
+  const subscription = optionalString(record?.subscription);
   const error = optionalString(record?.error);
   return {
     key,
     provider,
     ...(email ? { email } : {}),
     ...(plan ? { plan } : {}),
+    ...(subscription ? { subscription } : {}),
     status: typeof status === "string" && STATUSES.has(status) ? (status as QuotaAccount["status"]) : "error",
     ...(error ? { error } : {}),
     lines: Array.isArray(record?.lines)

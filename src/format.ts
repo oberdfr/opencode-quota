@@ -5,7 +5,36 @@
  * unit tested without a terminal.
  */
 
+import { bold, StyledText } from "@opentui/core";
 import type { QuotaAccount, QuotaLine, QuotaReport } from "./rpc.ts";
+
+/**
+ * Whether a provider's title should carry its own loading marker.
+ *
+ * Only once the section has numbers on screen. Before the first report arrives
+ * the section body already renders a full loading bar for that provider, so
+ * marking the title as well put two bars on screen for a single request. With
+ * numbers up, a small marker beside the title says which provider is being
+ * re-read without hiding the values underneath.
+ */
+export function showProviderSpinner(refreshing: boolean, hasReport: boolean): boolean {
+  return refreshing && hasReport;
+}
+
+/**
+ * Bold text for use as a `text` child.
+ *
+ * `TextNodeRenderable.add` accepts a string, another renderable, or a
+ * `StyledText`, and throws on anything else. The `bold` helper on its own returns
+ * a bare chunk, which is none of those, so the chunk is wrapped in a
+ * `StyledText`: the styled value the renderable actually expects.
+ *
+ * The return type is widened only so the published child type accepts it. The
+ * value really is a `StyledText` at runtime, which `isStyledText` confirms.
+ */
+export function strong(value: string): string {
+  return new StyledText([bold(value)]) as unknown as string;
+}
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -214,4 +243,90 @@ export function mergeGeminiAllowances(lines: readonly QuotaLine[]): QuotaLine[] 
     }
   }
   return out;
+}
+
+/** Gap between two allowances drawn on the same row. */
+export const COLUMN_GAP = 2;
+
+/**
+ * Splits an account's lines into the ones to draw side by side and the rest.
+ *
+ * Only consecutive `paired` lines are grouped, so an account can lead with a
+ * row of comparable windows and still list independent quotas underneath.
+ */
+export function splitPairedLines(lines: QuotaLine[]): { paired: QuotaLine[]; stacked: QuotaLine[] } {
+  const paired: QuotaLine[] = [];
+  const stacked: QuotaLine[] = [];
+  let stillPaired = true;
+  for (const line of lines) {
+    if (line.paired && stillPaired) {
+      paired.push(line);
+      continue;
+    }
+    stillPaired = false;
+    stacked.push(line);
+  }
+  return { paired, stacked };
+}
+
+export interface PairedLayout {
+  labelWidth: number;
+  barWidth: number;
+}
+
+/** Room kept per column for the two spaces and the percentage. */
+const COLUMN_OVERHEAD = 2 + 4;
+/** Room kept per column for the two spaces and the trailing detail. */
+const META_ROOM = 2 + 8;
+/** Narrowest bar that still reads as a bar rather than a smudge. */
+const MIN_PAIRED_BAR = 8;
+
+/**
+ * Works out how to draw paired allowances in the width available.
+ *
+ * The label column is sized to the data so the two bars start in the same place,
+ * then the bar takes whatever is left. Returns undefined when even the narrowest
+ * usable layout does not fit, and the caller stacks the allowances instead: a
+ * wrapped pair leaves a fragment of the second bar on the line below, which
+ * reads as stray output rather than as two limits.
+ */
+export function pairedLayout(
+  lines: QuotaLine[],
+  min: number,
+  max: number,
+  maxBar: number,
+  budget: number,
+): PairedLayout | undefined {
+  const labelWidth = Math.min(lines.reduce((acc, line) => Math.max(acc, line.label.length), min), max);
+  const gaps = COLUMN_GAP * (lines.length - 1);
+  const perColumnFixed = labelWidth + 1 + COLUMN_OVERHEAD + META_ROOM;
+
+  const barFor = (bar: number) => (perColumnFixed + bar) * lines.length + gaps;
+  if (barFor(MIN_PAIRED_BAR) > budget) return undefined;
+
+  // Largest bar that still fits, capped at the same width a stacked row uses so
+  // the two layouts do not disagree about how full a bar looks.
+  let bar = maxBar;
+  while (bar > MIN_PAIRED_BAR && barFor(bar) > budget) bar -= 1;
+  return { labelWidth, barWidth: bar };
+}
+
+/** A window kind, or undefined when the provider does not say which it is. */
+export type WindowKind = "5-hour" | "weekly";
+
+/**
+ * Names an allowance's window from how long it has left.
+ *
+ * Antigravity reports when a window refills rather than how long it runs, and the
+ * two are distinguishable: a rolling five-hour window has at most five hours
+ * left, and the weekly one is days out. Anything between is left unnamed, since
+ * calling it either would be a guess. The practical split is the tier, so an
+ * account on a subscription shows its five-hour allowance and one without shows
+ * the weekly one.
+ */
+export function windowKind(minutes: number | undefined): WindowKind | undefined {
+  if (minutes === undefined || minutes <= 0) return undefined;
+  if (minutes <= 6 * 60) return "5-hour";
+  if (minutes >= 5 * 24 * 60) return "weekly";
+  return undefined;
 }

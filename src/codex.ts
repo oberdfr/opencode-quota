@@ -161,6 +161,62 @@ function readWindow(
 const PRIMARY_KEYS = ["primary_window", "primaryWindow", "five_hour", "fiveHour"];
 const SECONDARY_KEYS = ["secondary_window", "secondaryWindow", "weekly"];
 
+/** A rolling five-hour window, the one every paid plan reports. */
+const FIVE_HOUR_MINUTES = 300;
+/** A calendar week, the allowance that runs alongside it on a paid plan. */
+const WEEK_MINUTES = 10_080;
+
+/**
+ * Names a window after how long it actually runs.
+ *
+ * The endpoint does not name its windows and which ones exist depends on the
+ * plan: a free account reports one 30-day window, a paid one also reports a
+ * 5-hour and a weekly allowance. Naming from the reported length means the row
+ * describes itself instead of guessing, and a free account's lone window reads
+ * "30-day" rather than implying a weekly limit it does not have.
+ */
+export function windowLabel(minutes: number | undefined, fallback: string): string {
+  if (!minutes || minutes <= 0) return fallback;
+  if (minutes === FIVE_HOUR_MINUTES) return "5-hour";
+  if (minutes % WEEK_MINUTES === 0) return `${Math.round(minutes / WEEK_MINUTES)}-week`;
+  if (minutes % 1440 === 0) return `${minutes / 1440}-day`;
+  if (minutes % 60 === 0) return `${Math.round(minutes / 60)}-hour`;
+  return fallback;
+}
+
+/** Friendly names for the plan ids the endpoint reports. */
+const PLAN_NAMES: Record<string, string> = {
+  free: "Free",
+  go: "Go",
+  plus: "Plus",
+  pro: "Pro",
+  business: "Business",
+  enterprise: "Enterprise",
+  team: "Team",
+  edu: "Edu",
+  education: "Edu",
+};
+
+/**
+ * Whether the plan is a paid subscription.
+ *
+ * Only the free tier is not one. This is what decides whether the account is
+ * worth labelling as a subscription: the endpoint reports the same windows for
+ * both, so the plan is the only thing that says an account is paid.
+ */
+export function isPaidPlan(plan: string | undefined): boolean {
+  if (!plan) return false;
+  return plan.trim().toLowerCase() !== "free";
+}
+
+/** "pro" -> "Pro". Unknown ids are passed through, trimmed of separators. */
+export function planLabel(plan: string | undefined): string | undefined {
+  if (!plan) return undefined;
+  const key = plan.trim().toLowerCase();
+  if (!key) return undefined;
+  return PLAN_NAMES[key] ?? key.replace(/[_-]+/g, " ").replace(/^./, (c) => c.toUpperCase());
+}
+
 function readAdditional(value: unknown): CodexWindow[] {
   const windows: CodexWindow[] = [];
   const entries: Array<[string, unknown]> = [];
@@ -205,6 +261,11 @@ export function parseCodexUsage(payload: unknown): CodexUsage | undefined {
   const secondary = rateLimit
     ? readWindow(rateLimit, SECONDARY_KEYS, "secondary", "Weekly window")
     : undefined;
+
+  // Named from the reported length rather than from the slot they came from, so
+  // the label matches the window the provider actually gave us.
+  if (primary) primary.label = windowLabel(primary.windowMinutes, primary.label);
+  if (secondary) secondary.label = windowLabel(secondary.windowMinutes, secondary.label);
   const additional = readAdditional(root.additional_rate_limits ?? root.additionalRateLimits);
 
   if (!primary && !secondary && additional.length === 0) return undefined;
