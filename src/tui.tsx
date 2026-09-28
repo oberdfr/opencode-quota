@@ -1,38 +1,228 @@
 /**
  * opencode-quota — terminal half.
  *
- * Registers `/quota`, asks the server half for a report, and shows it in a
- * dialog. Keeping the command here is what makes it a real slash command rather
- * than a prompt that would spend tokens on a model turn.
+ * Registers `/quota` and renders the report in a dialog. Collecting the report
+ * is the server half's job, so this file is only concerned with presentation and
+ * staying responsive: the dialog opens on the first frame, shows whatever was
+ * cached from last time, and swaps in fresh numbers when the request lands.
  */
 
+import { createRoot, createSignal } from "solid-js";
 import { Plugin } from "@opencode/plugin/tui";
-import { QuotaRpc, parseQuotaReport } from "./rpc.ts";
-import { formatReport } from "./format.ts";
+import { QuotaRpc, parseQuotaReport, type QuotaAccount, type QuotaReport } from "./rpc.ts";
+import { formatBar, formatLabel, formatWindowName, quotaTone } from "./format.ts";
+
+const BAR_WIDTH = 20;
+const LABEL_WIDTH = 26;
+const SPINNER_FRAMES = 10;
+
+type View =
+  | { status: "loading" }
+  | { status: "ready"; report: QuotaReport }
+  | { status: "error"; message: string };
+
+function relativeReset(iso: string, now: number): string | undefined {
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return undefined;
+  const minutes = Math.round((at - now) / 60_000);
+  if (minutes <= 0) return "resetting";
+  if (minutes < 60) return `resets in ${minutes}m`;
+  if (minutes < 60 * 24) return `resets in ${Math.round(minutes / 60)}h`;
+  return `resets in ${Math.round(minutes / (60 * 24))}d`;
+}
+
+/** Indeterminate bar for the loading state. */
+function spinnerBar(frame: number): string {
+  const head = (frame % SPINNER_FRAMES) + 1;
+  return `${"░".repeat(head - 1)}█${"░".repeat(Math.max(0, BAR_WIDTH - head))}`;
+}
 
 export default Plugin.define({
   id: "opencode-quota.tui",
   setup(context) {
     const quota = context.client.rpc(QuotaRpc);
+    // `storage.memory` returns a reactive store, so the cached report is read as
+    // a property. A wrapper object is used because the store's value type is
+    // constrained to non-null.
+    const [cache, patchCache] = context.storage.memory("report", {
+      initial: { report: null as QuotaReport | null },
+    });
 
-    const show = async () => {
-      let report: string;
-      try {
-        const result = await quota.report({});
-        report = formatReport(parseQuotaReport(result));
-      } catch (error) {
-        report = `Could not read quota: ${error instanceof Error ? error.message : String(error)}`;
+    // Live view state, owned by a Solid root created on open and disposed on
+    // close so the dialog re-renders in place rather than being torn down and
+    // rebuilt while the request is in flight.
+    let readView: (() => View) | undefined;
+    let writeView: ((next: View) => void) | undefined;
+    let disposeRoot: (() => void) | undefined;
+    let spinner: ReturnType<typeof setInterval> | undefined;
+    const [frame, setFrame] = createSignal(0);
+
+    const close = () => {
+      if (spinner !== undefined) {
+        clearInterval(spinner);
+        spinner = undefined;
       }
+      if (disposeRoot) {
+        disposeRoot();
+        disposeRoot = undefined;
+      }
+      readView = undefined;
+      writeView = undefined;
+      try {
+        context.ui.dialog.clear();
+      } catch {
+        // The host may already have torn the dialog down; nothing left to do.
+      }
+    };
+
+    const open = () => {
+      // Ignore a second /quota while one is already on screen.
+      if (disposeRoot) return;
+
+      const cached = cache.report;
+      // createRoot passes its disposer to the callback, so the root can be torn
+      // down later to release the signals it owns.
+      disposeRoot = createRoot((dispose) => {
+        const [signal, setSignal] = createSignal<View>(
+          cached ? { status: "ready", report: cached } : { status: "loading" },
+        );
+        readView = signal;
+        writeView = setSignal;
+        return dispose;
+      });
+
+      // A fresh fetch always runs; the cache only decides what the first frame shows.
+      spinner = setInterval(() => setFrame((n) => n + 1), 90);
 
       context.ui.dialog.set({ size: "large", centered: true });
       context.ui.dialog.show(
-        () => (
-          <box flexDirection="column" padding={1}>
-            <text fg={context.theme.text.base}>Quota</text>
-            <text fg={context.theme.text.muted}>{report}</text>
-          </box>
-        ),
-        () => context.ui.dialog.clear(),
+        () => <QuotaView read={readView!} frame={frame} />,
+        () => close(),
+      );
+
+      void quota
+        .report({})
+        .then((result) => {
+          const report = parseQuotaReport(result);
+          patchCache((draft) => {
+            draft.report = report;
+          });
+          writeView?.({ status: "ready", report });
+        })
+        .catch((error: unknown) => {
+          writeView?.({ status: "error", message: error instanceof Error ? error.message : String(error) });
+        })
+        .finally(() => {
+          if (spinner !== undefined) {
+            clearInterval(spinner);
+            spinner = undefined;
+          }
+        });
+    };
+
+    // The host's resolved theme is not resolvable from this package's types, so
+    // tokens are read defensively: an unexpected shape falls back to the two
+    // tokens the plugin guide documents, rather than rendering nothing.
+    const theme = context.theme as unknown as Record<string, any>;
+    const text = (theme.text ?? {}) as Record<string, string | undefined>;
+    const base = text.base;
+    const muted = text.muted ?? text.base;
+
+    const tone = (percent: number) => {
+      switch (quotaTone(percent)) {
+        case "ok":
+          return theme.success?.base ?? base;
+        case "warn":
+          return theme.warning?.base ?? base;
+        case "critical":
+          return theme.error?.base ?? base;
+        default:
+          return muted;
+      }
+    };
+
+    const AccountBlock = (props: { account: QuotaAccount; now: number }) => {
+      const account = () => props.account;
+      return (
+        <box flexDirection="column" marginBottom={1}>
+          <text fg={muted}>{account().email ?? account().key}</text>
+          {account().status === "disabled" ? (
+            <text fg={muted} opacity={0.7}>  disabled</text>
+          ) : account().status === "error" ? (
+            <text fg={muted} opacity={0.7}>{`  ${account().error ?? "error"}`}</text>
+          ) : (
+            account().lines.map((line) => {
+              const meta = [
+                formatWindowName(line.windowMinutes),
+                line.resetTime ? relativeReset(line.resetTime, props.now) : undefined,
+              ]
+                .filter(Boolean)
+                .join(" · ");
+              return (
+                <box flexDirection="row">
+                  <text fg={muted}>{formatLabel(line.label, LABEL_WIDTH)}</text>
+                  <text fg={tone(line.remainingPercent)}>{formatBar(line.remainingPercent, BAR_WIDTH)}</text>
+                  <text fg={base}>{` ${Math.round(line.remainingPercent)}%`}</text>
+                  {meta ? <text fg={muted} opacity={0.75}>{`  ${meta}`}</text> : null}
+                </box>
+              );
+            })
+          )}
+        </box>
+      );
+    };
+
+    const QuotaView = (props: { read: () => View; frame: () => number }) => {
+      const current = () => props.read();
+      // Read once so the union narrows; a second call would be untyped again.
+      const now = () => {
+        const state = current();
+        return state.status === "ready" ? state.report.generatedAt : Date.now();
+      };
+
+      return (
+        <box flexDirection="column" paddingX={2} paddingTop={1}>
+          <text fg={base}>Quota</text>
+
+          {(() => {
+            const state = current();
+            if (state.status === "loading") {
+              return (
+                <box flexDirection="column" marginTop={1}>
+                  <text fg={base}>{`  ${spinnerBar(props.frame())}`}</text>
+                  <text fg={muted} opacity={0.8}>  Fetching quota…</text>
+                </box>
+              );
+            }
+            if (state.status === "error") {
+              return <text fg={muted}>{`  ${state.message}`}</text>;
+            }
+            if (state.report.accounts.length === 0) {
+              return <text fg={muted}>  No quota data available.</text>;
+            }
+            return (
+              <box flexDirection="column">
+                {(["antigravity", "openai"] as const).map((provider) => {
+                  const group = state.report.accounts.filter((account) => account.provider === provider);
+                  if (group.length === 0) return null;
+                  return (
+                    <box flexDirection="column" marginTop={1}>
+                      <text fg={base}>{provider === "antigravity" ? "Antigravity" : "OpenAI (Codex)"}</text>
+                      {group.map((account) => (
+                        <AccountBlock account={account} now={now()} />
+                      ))}
+                    </box>
+                  );
+                })}
+                {state.report.notes.map((note) => (
+                  <text fg={muted} opacity={0.75}>{`  ${note}`}</text>
+                ))}
+              </box>
+            );
+          })()}
+
+          <text fg={muted} opacity={0.6} marginTop={1}>  esc to close</text>
+        </box>
       );
     };
 
@@ -40,7 +230,7 @@ export default Plugin.define({
     // host keeps its keymap state in a reactive context, and reaching for it
     // during setup runs outside that tree and fails with "Keymap.Provider is
     // missing". Claiming an `app` slot places this render inside the tree, and
-    // the returned disposer removes the slot when the plugin unloads.
+    // the disposer returned by `ui.slot` is returned from setup.
     return context.ui.slot({
       append: "app",
       render: () => {
@@ -54,7 +244,21 @@ export default Plugin.define({
               group: "opencode-quota",
               palette: true,
               slash: { name: "quota", aliases: ["quota-report"] },
-              run: show,
+              run: open,
+            },
+            {
+              id: "opencode-quota.close",
+              title: "Close quota",
+              group: "opencode-quota",
+              bind: "escape",
+              // Only active while the dialog is up, so escape keeps its normal
+              // meaning everywhere else.
+              enabled: () => disposeRoot !== undefined,
+              run: () => {
+                close();
+                // Let the host keep handling the key it was already seeing.
+                return false;
+              },
             },
           ],
         }));

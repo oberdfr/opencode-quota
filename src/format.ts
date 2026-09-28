@@ -86,3 +86,34 @@ export function formatReport(report: QuotaReport): string {
 
   return out.join("\n");
 }
+
+const BAR_WIDTH = 20;
+const FILLED = "█";
+const EMPTY = "░";
+
+/** Severity of a remaining percentage, used to pick the bar colour. */
+export type QuotaTone = "ok" | "warn" | "critical" | "spent";
+
+export function quotaTone(remainingPercent: number): QuotaTone {
+  if (remainingPercent <= 0) return "spent";
+  if (remainingPercent < 20) return "critical";
+  if (remainingPercent < 50) return "warn";
+  return "ok";
+}
+
+/**
+ * Renders a remaining percentage as a fixed-width bar.
+ *
+ * A percentage that is not a number, or is out of range, is clamped rather than
+ * trusted, so a malformed provider response cannot produce a broken bar.
+ */
+export function formatBar(remainingPercent: number, width: number = BAR_WIDTH): string {
+  const safe = Number.isFinite(remainingPercent) ? Math.min(Math.max(remainingPercent, 0), 100) : 0;
+  const filled = Math.round((safe / 100) * width);
+  return FILLED.repeat(filled) + EMPTY.repeat(Math.max(0, width - filled));
+}
+
+/** Pads a label to a fixed width so bars and percentages line up in a column. */
+export function formatLabel(label: string, width: number): string {
+  return label.length >= width ? `${label.slice(0, Math.max(0, width - 1))}…` : label.padEnd(width, " ");
+}

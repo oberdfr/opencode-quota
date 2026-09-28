@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatReport, formatResetTime, formatWindowName } from "./format.ts";
+import { formatBar, formatLabel, formatReport, formatResetTime, formatWindowName, quotaTone } from "./format.ts";
 import { parseQuotaReport } from "./rpc.ts";
 import type { QuotaReport } from "./rpc.ts";
 
@@ -160,5 +160,44 @@ describe("parseQuotaReport", () => {
       expect(parsed.notes).toEqual([]);
       expect(Number.isFinite(parsed.generatedAt)).toBe(true);
     }
+  });
+});
+
+describe("quotaTone", () => {
+  it("bands the remaining percentage", () => {
+    expect(quotaTone(100)).toBe("ok");
+    expect(quotaTone(50)).toBe("ok");
+    expect(quotaTone(49.9)).toBe("warn");
+    expect(quotaTone(20)).toBe("warn");
+    expect(quotaTone(19.9)).toBe("critical");
+    expect(quotaTone(0)).toBe("spent");
+    expect(quotaTone(-5)).toBe("spent");
+  });
+});
+
+describe("formatBar", () => {
+  it("fills proportionally to the percentage", () => {
+    expect(formatBar(100, 10)).toBe("█".repeat(10));
+    expect(formatBar(0, 10)).toBe("░".repeat(10));
+    expect(formatBar(50, 10)).toBe("█".repeat(5) + "░".repeat(5));
+  });
+
+  it("always renders the requested width", () => {
+    for (const pct of [0, 1, 33, 66, 99, 100]) {
+      expect(formatBar(pct, 20)).toHaveLength(20);
+    }
+  });
+
+  it("clamps values a provider could get wrong", () => {
+    expect(formatBar(150, 4)).toBe("█".repeat(4));
+    expect(formatBar(-20, 4)).toBe("░".repeat(4));
+    expect(formatBar(Number.NaN, 4)).toBe("░".repeat(4));
+  });
+});
+
+describe("formatLabel", () => {
+  it("pads short labels and truncates long ones", () => {
+    expect(formatLabel("Claude", 10)).toBe("Claude    ");
+    expect(formatLabel("A very long label indeed", 10)).toBe("A very lo…");
   });
 });
