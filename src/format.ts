@@ -203,46 +203,74 @@ export function rowWidth(line: QuotaLine, now: number, labelWidth: number, barWi
 export const GEMINI_GROUP_IDS = ["antigravity:gemini-pro", "antigravity:gemini-flash"] as const;
 
 /**
+ * The window a line is on, from the name its label carries.
+ *
+ * Labels are `<family> · <window>`, and the window is the part that decides
+ * whether two rows are two halves of one allowance or two different allowances.
+ */
+function lineWindow(line: QuotaLine): string {
+  const marker = " · ";
+  const at = line.label.lastIndexOf(marker);
+  return at === -1 ? "" : line.label.slice(at + marker.length);
+}
+
+/**
  * Collapses the Gemini Pro and Gemini Flash allowances into a single line.
  *
- * The two allowances are tracked separately all the way down: the RPC still
- * reports each one, and they are merged only for display. The merged value is
- * the lower of the two, so the bar reflects whichever allowance is tighter if
- * they ever diverge, and it takes the sooner reset for the same reason.
+ * The two are tracked separately all the way down: the RPC still reports each one,
+ * and they are merged only for display. The merged value is the lower of the two,
+ * so the bar reflects whichever allowance is tighter if they ever diverge, and it
+ * takes the sooner reset for the same reason.
  *
- * The merged line takes the position of the first Gemini line so ordering in
- * the report is otherwise preserved. Any other line is passed through untouched.
+ * They are merged per window, not wholesale. A subscription account reports both
+ * halves twice, once for the five-hour window and once for the weekly one, and
+ * collapsing across windows would produce a single row that can only report one
+ * of the two windows' figures. Matching is on the family prefix so a row is still
+ * recognised with the window named after it.
+ *
+ * The merged line takes the position of the first Gemini line so ordering in the
+ * report is otherwise preserved. Any other line is passed through untouched.
  */
 export function mergeGeminiAllowances(lines: readonly QuotaLine[]): QuotaLine[] {
-  const isGemini = (id: string) => (GEMINI_GROUP_IDS as readonly string[]).includes(id);
-  const gemini = lines.filter((line) => isGemini(line.id));
-  if (gemini.length < 2) return [...lines];
+  const familyOf = (id: string) => id.split(":").slice(0, 2).join(":");
+  const isGemini = (id: string) => (GEMINI_GROUP_IDS as readonly string[]).includes(familyOf(id));
 
-  const resets = gemini
-    .map((line) => line.resetTime)
-    .filter((value): value is string => typeof value === "string")
-    .sort();
-
-  const merged: QuotaLine = {
-    id: "antigravity:gemini",
-    label: "Gemini",
-    remainingPercent: Math.min(...gemini.map((line) => line.remainingPercent)),
-    ...(resets[0] ? { resetTime: resets[0] } : {}),
-  };
-
-  const out: QuotaLine[] = [];
-  let inserted = false;
+  const windows: string[] = [];
   for (const line of lines) {
-    if (!isGemini(line.id)) {
-      out.push(line);
-      continue;
-    }
-    if (!inserted) {
-      out.push(merged);
-      inserted = true;
-    }
+    if (isGemini(line.id) && !windows.includes(lineWindow(line))) windows.push(lineWindow(line));
   }
-  return out;
+
+  // The merged row is placed where the first Gemini line of its window was, and
+  // everything else keeps its position. Walking the list once and replacing each
+  // window's first Gemini line with the merge is what keeps the order stable.
+  const placed = new Set<string>();
+  return lines.flatMap((line) => {
+    if (!isGemini(line.id)) return [line];
+    const window = lineWindow(line);
+    if (placed.has(window)) return [];
+
+    const gemini = lines.filter((other) => isGemini(other.id) && lineWindow(other) === window);
+    if (gemini.length < 2) {
+      placed.add(window);
+      return [line];
+    }
+
+    const resets = gemini
+      .map((entry) => entry.resetTime)
+      .filter((value): value is string => typeof value === "string")
+      .sort();
+
+    placed.add(window);
+    return [
+      {
+        id: `antigravity:gemini${window ? `:${window}` : ""}`,
+        label: window ? `Gemini · ${window}` : "Gemini",
+        remainingPercent: Math.min(...gemini.map((entry) => entry.remainingPercent)),
+        ...(resets[0] ? { resetTime: resets[0] } : {}),
+        ...(gemini[0]?.windowMinutes !== undefined ? { windowMinutes: gemini[0].windowMinutes } : {}),
+      },
+    ];
+  });
 }
 
 /** Gap between two allowances drawn on the same row. */
@@ -330,3 +358,4 @@ export function windowKind(minutes: number | undefined): WindowKind | undefined 
   if (minutes >= 5 * 24 * 60) return "weekly";
   return undefined;
 }
+

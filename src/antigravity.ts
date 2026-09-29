@@ -53,22 +53,8 @@ const AntigravityQuotaRpc = Rpc.define({
                     additionalProperties: false,
                   },
                 },
-                geminiCli: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    properties: {
-                      modelId: { type: "string" },
-                      remainingPercent: { type: "number" },
-                      resetTime: { type: "string" },
-                    },
-                    required: ["modelId", "remainingPercent"],
-                    additionalProperties: false,
-                  },
-                },
-                geminiCliError: { type: "string" },
               },
-              required: ["index", "status", "enabled", "groups", "geminiCli"],
+              required: ["index", "status", "enabled", "groups"],
               additionalProperties: false,
             },
           },
@@ -101,8 +87,6 @@ export interface AntigravityQuotaResult {
       /** Minutes until the window refills, when the provider reports a reset. */
       windowMinutes?: number;
     }>;
-    geminiCli: Array<{ modelId: string; remainingPercent: number; resetTime?: string }>;
-    geminiCliError?: string;
   }>;
 }
 

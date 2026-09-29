@@ -19,7 +19,7 @@ import type { Context } from "@opencode/plugin/promise/plugin";
 import { QuotaRpc, type QuotaAccount, type QuotaLine, type QuotaProvider, type QuotaReport } from "./rpc.ts";
 import { fetchAntigravityQuota, type RpcCaller } from "./antigravity.ts";
 import { fetchCodexUsage, isPaidPlan, planLabel, type CodexCredential } from "./codex.ts";
-import { windowKind } from "./format.ts";
+import { mergeGeminiAllowances, windowKind } from "./format.ts";
 
 /**
  * Whether an Antigravity plan is a paid subscription.
@@ -148,30 +148,28 @@ export function antigravityAccounts(result: Awaited<ReturnType<typeof fetchAntig
 
   return result.accounts.map((account) => {
     const key = account.email ?? `antigravity:${account.index}`;
-    let lines: QuotaLine[] = account.groups.map((group) => ({
-      id: `antigravity:${group.id}`,
-      label: group.label,
-      remainingPercent: group.remainingPercent,
-      ...(group.resetTime ? { resetTime: group.resetTime } : {}),
-      ...(group.windowMinutes !== undefined ? { windowMinutes: group.windowMinutes } : {}),
-    }));
-
-    // Name the window each allowance belongs to, and mark the ones that share a
-    // window so the view can set them side by side.
-    lines = lines.map((line) => {
-      const kind = windowKind(line.windowMinutes);
-      if (!kind) return line;
-      return { ...line, label: `${line.label} · ${kind}`, paired: true };
+    // One row per window.
+    //
+    // A subscription account runs on a five-hour window and a weekly one at the
+    // same time, so the provider reports a family once per window it is on and a
+    // row per report would repeat the same family label twice. Each row is named
+    // for its window instead, which is what tells the two apart, with the family
+    // it covers behind it.
+    let lines: QuotaLine[] = account.groups.map((group, index) => {
+      const kind = windowKind(group.windowMinutes);
+      return {
+        id: `antigravity:${group.id}:${index}`,
+        label: kind ? `${group.label} · ${kind}` : group.label,
+        remainingPercent: group.remainingPercent,
+        ...(group.resetTime ? { resetTime: group.resetTime } : {}),
+        ...(group.windowMinutes !== undefined ? { windowMinutes: group.windowMinutes } : {}),
+      };
     });
 
-  for (const model of account.geminiCli) {
-      lines.push({
-        id: `gemini-cli:${model.modelId}`,
-        label: `Gemini CLI · ${model.modelId}`,
-        remainingPercent: model.remainingPercent,
-        ...(model.resetTime ? { resetTime: model.resetTime } : {}),
-      });
-    }
+    // Pro and Flash are two halves of one Gemini allowance, and showing them as
+    // two rows on a subscription account already showing a five-hour and a weekly
+    // window would read as four separate limits rather than three.
+    lines = mergeGeminiAllowances(lines);
 
     return {
       key: `antigravity:${key}`,

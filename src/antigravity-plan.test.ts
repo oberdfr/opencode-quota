@@ -30,7 +30,6 @@ function account(
           { id: "gemini-pro", label: "Gemini Pro", remainingPercent: 100, modelCount: 3, windowMinutes: FIVE_HOURS },
           { id: "claude", label: "Claude", remainingPercent: 8, modelCount: 2, windowMinutes: FIVE_HOURS },
         ],
-        geminiCli: [],
         ...overrides,
       },
     ],
@@ -78,8 +77,6 @@ describe("the window on each allowance", () => {
       "Gemini Pro · 5-hour",
       "Claude · 5-hour",
     ]);
-    // Both sit in the same window, so they are set side by side.
-    expect(mapped?.lines.every((line) => line.paired)).toBe(true);
   });
 
   it("names the weekly window a free account runs on", async () => {
@@ -95,6 +92,30 @@ describe("the window on each allowance", () => {
     expect(mapped?.lines[0]?.label).toBe("Gemini Pro · weekly");
   });
 
+  it("keeps both windows of a subscription account as separate rows", async () => {
+    // A Google AI Pro account runs on a five-hour window and a weekly one at the
+    // same time. Collapsing them would report one figure and hide the other, which
+    // is how a subscription account used to look like it had a single limit.
+    const mapped = await map(
+      account({
+        subscription: { id: "g1-pro-tier", name: "Google AI Pro" },
+        groups: [
+          { id: "gemini-pro", label: "Gemini Pro", remainingPercent: 98, modelCount: 13, windowMinutes: 3 * 60 },
+          { id: "claude", label: "Claude", remainingPercent: 100, modelCount: 2, windowMinutes: 5 * 60 },
+          { id: "gemini-pro", label: "Gemini Pro", remainingPercent: 99, modelCount: 13, windowMinutes: ONE_WEEK },
+          { id: "claude", label: "Claude", remainingPercent: 100, modelCount: 2, windowMinutes: ONE_WEEK - 60 },
+        ],
+      }),
+    );
+
+    expect(mapped?.lines.map((line) => line.label)).toEqual([
+      "Gemini Pro · 5-hour",
+      "Claude · 5-hour",
+      "Gemini Pro · weekly",
+      "Claude · weekly",
+    ]);
+  });
+
   it("leaves the label alone when the window cannot be told", async () => {
     const mapped = await map(
       account({
@@ -105,7 +126,6 @@ describe("the window on each allowance", () => {
     );
 
     expect(mapped?.lines[0]?.label).toBe("Claude");
-    expect(mapped?.lines[0]?.paired).toBeUndefined();
   });
 
   it("carries the window through so the reset countdown can be shown", async () => {
