@@ -429,10 +429,17 @@ export default Plugin.define({
       return (
         <box flexDirection="column" marginTop={1}>
           <box flexDirection="row" gap={1} marginBottom={NAME_GAP}>
-            <text fg={muted}>{accountTitle(account())}</text>
-            {/* Names the plan, so a paid account is recognisable as one. */}
+            {/* The name is the heading for everything under it, so it is the
+                brightest thing in the block: the provider above it is the only
+                other bold line in the dialog, and the reading order runs provider,
+                account, family, windows. It was the muted one, with the plan badge
+                brighter than the name it qualifies, which read as the badge being
+                the subject. */}
+            <text fg={base}>{strong(accountTitle(account()))}</text>
+            {/* Names the plan, so a paid account is recognisable as one. Secondary
+                to the name it belongs to. */}
             {account().subscription ? (
-              <text fg={base} opacity={0.7}>{`(${account().subscription})`}</text>
+              <text fg={muted}>{`(${account().subscription})`}</text>
             ) : null}
           </box>
           {account().status === "disabled" ? (
@@ -451,7 +458,9 @@ export default Plugin.define({
               // thing that had to go, and a bar is the figure worth keeping.
               return (
                 <>
-                  <text fg={muted}>{lineFamily(row[0]!)}</text>
+                  {/* One step below the account name it belongs to, and above the
+                      windows under it. */}
+                  <text fg={base} opacity={0.85}>{lineFamily(row[0]!)}</text>
                   <box flexDirection="row">
                     {row.map((line, index) => (
                       <Allowance
