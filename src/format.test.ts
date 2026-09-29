@@ -9,7 +9,6 @@ import {
   formatWindowName,
   mergeGeminiAllowances,
   quotaTone,
-  pairedLayout,
   showProviderSpinner,
   windowRows,
   strong,
@@ -406,52 +405,6 @@ describe("windowRows", () => {
   });
 });
 
-describe("pairedLayout", () => {
-  const FIVE_HOUR = { id: "a", label: "5-hour", remainingPercent: 73, paired: true };
-  const WEEKLY = { id: "b", label: "1-week", remainingPercent: 36, paired: true };
-
-  it("gives both columns the same label width so the bars line up", () => {
-    const layout = pairedLayout([FIVE_HOUR, WEEKLY], 8, 18, 12, 72);
-    expect(layout?.labelWidth).toBe(8);
-  });
-
-  it("uses the full bar when the row is wide enough", () => {
-    // 8 label + 1 gap + 12 bar + 2 + "100%" + 2 + detail = 25 fixed plus the
-    // bar, twice, plus the two-space gap between: 76.
-    expect(pairedLayout([FIVE_HOUR, WEEKLY], 8, 18, 12, 76)?.barWidth).toBe(12);
-  });
-
-  it("narrows the bar rather than wrapping the row", () => {
-    // Room for the pair, but not for a full-width bar in both.
-    const layout = pairedLayout([FIVE_HOUR, WEEKLY], 8, 18, 12, 70);
-    expect(layout).toBeDefined();
-    expect(layout?.barWidth).toBeLessThan(12);
-    expect(layout?.barWidth).toBeGreaterThanOrEqual(8);
-  });
-
-  it("refuses to pair when even the narrowest bar would not fit", () => {
-    // The caller stacks instead: a wrapped pair leaves a fragment of the second
-    // bar on the line below, which reads as stray output. 68 is the narrowest
-    // width that still allows a bar of eight.
-    expect(pairedLayout([FIVE_HOUR, WEEKLY], 8, 18, 12, 56)).toBeUndefined();
-    expect(pairedLayout([FIVE_HOUR, WEEKLY], 8, 18, 12, 67)).toBeUndefined();
-    expect(pairedLayout([FIVE_HOUR, WEEKLY], 8, 18, 12, 68)).toBeDefined();
-  });
-
-  it("refuses to pair three columns in a narrow dialog", () => {
-    const three = [FIVE_HOUR, WEEKLY, { ...WEEKLY, id: "c", label: "Monthly" }];
-    expect(pairedLayout(three, 8, 18, 12, 76)).toBeUndefined();
-  });
-
-  it("caps a long label so one name cannot push the pair out of the row", () => {
-    const long = [
-      { id: "a", label: "A very long window label", remainingPercent: 50, paired: true },
-      WEEKLY,
-    ];
-    const layout = pairedLayout(long, 8, 18, 12, 200);
-    expect(layout?.labelWidth).toBe(18);
-  });
-});
 
 describe("windowKind", () => {
   it("names a five-hour window from the hours left on it", () => {

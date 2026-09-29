@@ -23,7 +23,7 @@ import {
   formatLabel,
   formatMeta,
   mergeGeminiAllowances,
-  pairedLayout,
+  pairPlan,
   quotaTone,
   showProviderSpinner,
   strong,
@@ -34,17 +34,17 @@ import {
  * Characters available for a row once the dialog's left and right padding are
  * taken off.
  *
- * A row wider than this wraps, which leaves a stray bar fragment on the line
- * below. The figure is what the layout asks for rather than a measurement of the
- * dialog, which could not be taken from here: the layout reserves room for the
- * longest label and the longest trailing detail it will ever be given, so a real
- * pair comes out well under it — 42 characters for a five-hour and a weekly
- * window side by side. It is the threshold the layout falls back below, and a
- * pair that does not fit under it is stacked rather than wrapped.
+ * Measured from the dialog itself rather than assumed, because the assumption was
+ * wrong in both directions: the dialog asks for a fixed size, but a terminal
+ * narrower than that clips it, and a budget set for the wider case pairs
+ * allowances that then wrap, leaving a stray bar fragment on the line below. The
+ * layout reads the width the dialog was actually given and works from that, and
+ * this is only what the first frame falls back to before the dialog has been laid
+ * out and reported its size.
  */
-const CONTENT_BUDGET = 88;
+const CONTENT_FALLBACK = 60;
 const BAR_WIDTH = 12;
-const MIN_LABEL_WIDTH = 8;
+const MIN_LABEL_WIDTH = 6;
 
 /**
  * Space under an account name, before its first allowance.
@@ -59,6 +59,8 @@ const MIN_LABEL_WIDTH = 8;
  */
 const NAME_GAP = 0;
 const MAX_LABEL_WIDTH = 18;
+/** Padding either side of the dialog body, taken off the measured width. */
+const CONTENT_PADDING = 4;
 const SPINNER_FRAMES = 10;
 const CLOSE_COMMAND_ID = "opencode-quota.close";
 const SHOW_COMMAND_ID = "opencode-quota.show";
@@ -309,8 +311,9 @@ export default Plugin.define({
         return dispose;
       });
 
-      // xlarge: the subscription row puts two allowances side by side, which does not
-      // fit the narrower sizes without shrinking the bars past readability.
+      // The widest size, so the paired row has room for it. A terminal narrower
+      // than this clips the dialog, which is why the layout reads the width the
+      // dialog was actually given rather than this size.
       context.ui.dialog.set({ size: "xlarge", centered: true });
       context.ui.dialog.show(
         () => <QuotaView read={readView!} frame={frame} />,
@@ -342,16 +345,46 @@ export default Plugin.define({
       }
     };
 
+    /**
+     * Width the dialog was actually given, in characters.
+     *
+     * Set from the dialog's own root renderable once it has been laid out. Reading
+     * it beats assuming the size that was asked for: the dialog is clipped to a
+     * narrower terminal, and a layout built for the width that was requested then
+     * overflows the width that exists.
+     */
+    const [measured, setMeasured] = createSignal<number | undefined>(undefined);
+    /** Width a row may occupy, falling back until the dialog reports its own. */
+    const contentWidth = () => measured() ?? CONTENT_FALLBACK;
+
     /** One allowance's label, bar, percentage and trailing detail. */
-    const Allowance = (props: { line: QuotaLine; now: number; width: number; barWidth?: number; gap?: number }) => {
+    const Allowance = (props: {
+      line: QuotaLine;
+      now: number;
+      width: number;
+      barWidth?: number;
+      gap?: number;
+      /** Replaces the label, so a pair can show just the window it sits in. */
+      label?: string;
+    }) => {
       const meta = () => formatMeta(props.line, props.now);
       const lead = props.gap ? " ".repeat(props.gap) : "";
+      // A bar of 0 is the layout saying the width will not take one. The
+      // percentage is then the whole figure, so the row does not read as missing
+      // something.
+      const bar = props.barWidth === undefined ? BAR_WIDTH : props.barWidth;
       return (
         <box flexDirection="row">
-          <text fg={muted}>{`${lead}${formatLabel(props.line.label, props.width)} `}</text>
-          <text fg={tone(props.line.remainingPercent)}>
-            {formatBar(props.line.remainingPercent, props.barWidth ?? BAR_WIDTH)}
-          </text>
+          <text fg={muted}>{`${lead}${formatLabel(props.label ?? props.line.label, props.width)}`}</text>
+          {/* The space after the label belongs to the bar, so a barless column does
+              not pay for it. On a narrow terminal that space is the difference
+              between a pair on one row and the same two on two rows. */}
+          {bar > 0 ? (
+            <>
+              <text fg={muted}> </text>
+              <text fg={tone(props.line.remainingPercent)}>{formatBar(props.line.remainingPercent, bar)}</text>
+            </>
+          ) : null}
           <text fg={base}>{`  ${Math.round(props.line.remainingPercent)}%`}</text>
           {meta() ? <text fg={muted} opacity={0.8}>{`  ${meta()}`}</text> : null}
         </box>
@@ -376,7 +409,13 @@ export default Plugin.define({
         return widest;
       };
       const layout = () =>
-        pairedLayout(widestPair(), MIN_LABEL_WIDTH, MAX_LABEL_WIDTH, BAR_WIDTH, CONTENT_BUDGET);
+        pairPlan(widestPair(), MIN_LABEL_WIDTH, MAX_LABEL_WIDTH, BAR_WIDTH, contentWidth());
+      /** The window each column of a pair sits in, without the family on it. */
+      const windowOf = (line: QuotaLine) => {
+        const marker = " · ";
+        const at = line.label.lastIndexOf(marker);
+        return at === -1 ? line.label : line.label.slice(at + marker.length);
+      };
       // Only set them side by side when the row genuinely fits; otherwise they
       // stack, since a wrapped pair leaves a fragment of the second bar on the
       // line below, which reads as stray output rather than as a second limit.
@@ -395,21 +434,31 @@ export default Plugin.define({
           ) : account().status === "error" ? (
             <text fg={muted} opacity={0.7}>{`  ${account().error ?? "error"}`}</text>
           ) : (
-            rows().map((row) => (
-              <box flexDirection="row">
-                {row.length > 1 && fits()
-                  ? row.map((line, index) => (
+            rows().map((row) => {
+              const plan = row.length > 1 ? layout() : undefined;
+              const family = row[0]!.label.split(" · ")[0]!;
+              return (
+                <box flexDirection="row">
+                  {plan && plan.familyWidth > 0 ? (
+                    <text fg={muted}>{formatLabel(family, plan.familyWidth + COLUMN_GAP)}</text>
+                  ) : null}
+                  {row.map((line, index) =>
+                    plan ? (
                       <Allowance
                         line={line}
+                        label={windowOf(line)}
                         now={props.now}
-                        width={layout()?.labelWidth ?? props.width}
-                        barWidth={layout()?.barWidth}
+                        width={plan.windowWidth}
+                        barWidth={plan.barWidth}
                         gap={index === 0 ? undefined : COLUMN_GAP}
                       />
-                    ))
-                  : row.map((line) => <Allowance line={line} now={props.now} width={props.width} />)}
-              </box>
-            ))
+                    ) : (
+                      <Allowance line={line} now={props.now} width={props.width} />
+                    ),
+                  )}
+                </box>
+              );
+            })
           )}
         </box>
       );
@@ -492,6 +541,15 @@ export default Plugin.define({
           // No top padding: the first section brings its own spacing with the
           // marginTop on the provider blocks below.
           paddingTop={0}
+          // Reports the width the dialog was actually given, so the paired layout
+          // is built for the space that exists rather than the space that was
+          // asked for. A terminal narrower than the requested size clips the
+          // dialog, and a pair laid out for the wider case wraps, which leaves a
+          // fragment of the second bar on the line below.
+          onSizeChange={function (this: { width: number }) {
+            const available = this.width - CONTENT_PADDING * 2;
+            if (available > 0 && available !== measured()) setMeasured(available);
+          }}
           // Second, independent way out. A custom dialog owns its own dismissal,
           // so the dialog's root renderable takes focus and closes on escape
           // directly. This does not rely on the host delivering keys to plugin

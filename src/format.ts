@@ -362,47 +362,75 @@ export function windowRows(lines: readonly QuotaLine[]): QuotaLine[][] {
   return rows;
 }
 
-export interface PairedLayout {
-  labelWidth: number;
+/** What a pair needs in order to be drawn beside itself. */
+export interface PairPlan {
+  /** Column holding the family, when the window names are shown on their own. */
+  familyWidth: number;
+  /** Column holding the window each allowance sits in. */
+  windowWidth: number;
+  /** 0 when the width will not take a bar, in which case the percentage carries it. */
   barWidth: number;
+}
+
+/**
+ * Works out how a pair of windows can be drawn side by side in the room there is.
+ *
+ * A family running on two windows is only readable as a pair when both are on
+ * screen at once, so the layout is built around the two levels of detail that
+ * matter — which window, and how much is left in it — and the bar is what gives
+ * way first. The family moves to a column of its own so the two window names do
+ * not each carry it, which on a narrow terminal is the difference between fitting
+ * and not.
+ *
+ * Returns undefined when even the barless form does not fit, and the caller stacks
+ * the allowances: a wrapped pair leaves a fragment of the second bar on the line
+ * below, which reads as stray output rather than as a second limit.
+ */
+export function pairPlan(
+  lines: readonly QuotaLine[],
+  min: number,
+  max: number,
+  maxBar: number,
+  budget: number,
+): PairPlan | undefined {
+  if (lines.length < 2) return undefined;
+
+  const families = lines.map(lineFamily);
+  // Only one family per row. Two different budgets side by side is not a pair of
+  // one budget, and a single family column would mislabel one of them.
+  if (!families.every((family) => family === families[0])) return undefined;
+
+  const names = lines.map(lineWindowName);
+  if (names.some((name) => name === "")) return undefined;
+
+  const familyWidth = families[0]!.length;
+  const windowWidth = Math.min(Math.max(...names.map((n) => n.length), min), max);
+  const leading = familyWidth + COLUMN_GAP;
+
+  // label, then the bar and its gap, the percentage and the trailing detail. The
+  // gap after the label belongs to the bar, so a barless column does not pay for
+  // it: on a narrow terminal that space is the difference between a pair and two
+  // rows.
+  const roomFor = (bar: number) => {
+    const perColumn = windowWidth + (bar > 0 ? 1 + bar : 0) + COLUMN_OVERHEAD + META_ROOM;
+    return leading + perColumn * lines.length + COLUMN_GAP * (lines.length - 1);
+  };
+  if (roomFor(0) > budget) return undefined;
+
+  let barWidth = maxBar;
+  while (barWidth > 0 && roomFor(barWidth) > budget) barWidth -= 1;
+  // A bar one or two characters wide is not a bar, it is a smudge that reads as a
+  // rendering fault. Below the narrowest that still says something, the percentage
+  // carries the figure on its own.
+  return { familyWidth, windowWidth, barWidth: barWidth >= MIN_PAIRED_BAR ? barWidth : 0 };
 }
 
 /** Room kept per column for the two spaces and the percentage. */
 const COLUMN_OVERHEAD = 2 + 4;
 /** Room kept per column for the two spaces and the trailing detail. */
-const META_ROOM = 2 + 8;
+const META_ROOM = 2 + 7;
 /** Narrowest bar that still reads as a bar rather than a smudge. */
-const MIN_PAIRED_BAR = 8;
-
-/**
- * Works out how to draw paired allowances in the width available.
- *
- * The label column is sized to the data so the two bars start in the same place,
- * then the bar takes whatever is left. Returns undefined when even the narrowest
- * usable layout does not fit, and the caller stacks the allowances instead: a
- * wrapped pair leaves a fragment of the second bar on the line below, which
- * reads as stray output rather than as two limits.
- */
-export function pairedLayout(
-  lines: QuotaLine[],
-  min: number,
-  max: number,
-  maxBar: number,
-  budget: number,
-): PairedLayout | undefined {
-  const labelWidth = Math.min(lines.reduce((acc, line) => Math.max(acc, line.label.length), min), max);
-  const gaps = COLUMN_GAP * (lines.length - 1);
-  const perColumnFixed = labelWidth + 1 + COLUMN_OVERHEAD + META_ROOM;
-
-  const barFor = (bar: number) => (perColumnFixed + bar) * lines.length + gaps;
-  if (barFor(MIN_PAIRED_BAR) > budget) return undefined;
-
-  // Largest bar that still fits, capped at the same width a stacked row uses so
-  // the two layouts do not disagree about how full a bar looks.
-  let bar = maxBar;
-  while (bar > MIN_PAIRED_BAR && barFor(bar) > budget) bar -= 1;
-  return { labelWidth, barWidth: bar };
-}
+const MIN_PAIRED_BAR = 5;
 
 /** A window kind, or undefined when the provider does not say which it is. */
 export type WindowKind = "5-hour" | "weekly";
