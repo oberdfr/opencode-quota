@@ -20,7 +20,7 @@ const NOW = Date.parse("2026-09-27T12:00:00.000Z");
 
 const claude5h = (id = "c5") => ({
   id,
-  label: "Claude · 5-hour",
+  label: "Claude · 5h",
   remainingPercent: 4,
   resetTime: new Date(NOW + 2 * HOUR + 47 * 60_000).toISOString(),
 });
@@ -32,26 +32,26 @@ describe("a pair in a narrow dialog", () => {
     // The measured width of the dialog body. The bar is the figure the row is
     // really showing, and the percentage beside it is the same number spelled out,
     // so the bar is what the layout gives up last.
-    const plan = pairPlan([claude5h(), claudeWeekly], NOW, 6, 18, 12, 52);
+    const plan = pairPlan([claude5h(), claudeWeekly], NOW, 2, 18, 12, 52);
 
     expect(plan).toBeDefined();
     expect(plan?.barWidth).toBeGreaterThanOrEqual(4);
   });
 
   it("grows the bar as the width allows", () => {
-    const narrow = pairPlan([claude5h(), claudeWeekly], NOW, 6, 18, 12, 52);
-    const wide = pairPlan([claude5h(), claudeWeekly], NOW, 6, 18, 12, 88);
+    const narrow = pairPlan([claude5h(), claudeWeekly], NOW, 2, 18, 12, 52);
+    const wide = pairPlan([claude5h(), claudeWeekly], NOW, 2, 18, 12, 88);
 
     expect(wide?.barWidth).toBeGreaterThan(narrow?.barWidth ?? 0);
     expect(wide?.barWidth).toBe(12);
   });
 
   it("sizes the window column to the names it holds", () => {
-    const plan = pairPlan([claude5h(), claudeWeekly], NOW, 6, 18, 12, 88);
+    const plan = pairPlan([claude5h(), claudeWeekly], NOW, 2, 18, 12, 88);
 
-    // "5-hour" and "weekly" are both six. Padding past that is width thrown away,
+    // "5h" and "weekly" are both six. Padding past that is width thrown away,
     // and on a narrow terminal that width is the bar.
-    expect(plan?.windowWidth).toBe(6);
+    expect(plan?.windowWidths).toEqual([2, 6]);
   });
 
   it("measures the detail it will really print", () => {
@@ -66,7 +66,7 @@ describe("a pair in a narrow dialog", () => {
       12,
       52,
     );
-    const short = pairPlan([claude5h(), claudeWeekly], NOW, 6, 18, 12, 52);
+    const short = pairPlan([claude5h(), claudeWeekly], NOW, 2, 18, 12, 52);
 
     expect(long?.barWidth).toBeLessThan(short?.barWidth ?? 12);
   });
@@ -74,7 +74,7 @@ describe("a pair in a narrow dialog", () => {
   it("drops a bar too narrow to read rather than drawing a smudge", () => {
     // One or two filled cells is not a bar, it is what a bar looks like when
     // something has gone wrong, and a percentage beside it would be believed.
-    const plan = pairPlan([claude5h(), claudeWeekly], NOW, 6, 18, 12, 44);
+    const plan = pairPlan([claude5h(), claudeWeekly], NOW, 2, 18, 12, 44);
 
     expect(plan?.barWidth).toBe(0);
   });
@@ -82,25 +82,25 @@ describe("a pair in a narrow dialog", () => {
   it("gives up rather than drawing a pair that does not fit", () => {
     // Below the barless form there is nothing left to drop that would still be a
     // readable pair, and a wrapped one is worse than two rows.
-    expect(pairPlan([claude5h(), claudeWeekly], NOW, 6, 18, 12, 30)).toBeUndefined();
+    expect(pairPlan([claude5h(), claudeWeekly], NOW, 2, 18, 12, 30)).toBeUndefined();
   });
 
   it("will not put two different families in one row", () => {
     // A row whose columns are different budgets is not a pair of one budget, and
     // a single family heading above it would mislabel one of them.
-    expect(pairPlan([claude5h(), geminiWeekly], NOW, 6, 18, 12, 88)).toBeUndefined();
+    expect(pairPlan([claude5h(), geminiWeekly], NOW, 2, 18, 12, 88)).toBeUndefined();
   });
 
   it("refuses a line with no window to name", () => {
     // An allowance the provider does not put in a window cannot be paired, since
     // the row would have nothing to tell the two columns apart by.
     expect(
-      pairPlan([{ id: "c", label: "Claude", remainingPercent: 5 }, claudeWeekly], NOW, 6, 18, 12, 88),
+      pairPlan([{ id: "c", label: "Claude", remainingPercent: 5 }, claudeWeekly], NOW, 2, 18, 12, 88),
     ).toBeUndefined();
   });
 
   it("does not pair a single line", () => {
-    expect(pairPlan([claudeWeekly], NOW, 6, 18, 12, 88)).toBeUndefined();
+    expect(pairPlan([claudeWeekly], NOW, 2, 18, 12, 88)).toBeUndefined();
   });
 });
 
@@ -109,7 +109,7 @@ describe("pairing what an account reports", () => {
     const rows = windowRows([
       claude5h(),
       claudeWeekly,
-      { id: "g5", label: "Gemini · 5-hour", remainingPercent: 98 },
+      { id: "g5", label: "Gemini · 5h", remainingPercent: 98 },
       geminiWeekly,
     ]);
 

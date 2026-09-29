@@ -66,7 +66,7 @@ describe("the trailing detail on a row", () => {
     // placement had not already said.
     expect(
       formatMeta(
-        { id: "a", label: "Claude · 5-hour", remainingPercent: 4, resetTime: new Date(now + 2 * HOUR + 47 * MINUTE).toISOString() },
+        { id: "a", label: "Claude · 5h", remainingPercent: 4, resetTime: new Date(now + 2 * HOUR + 47 * MINUTE).toISOString() },
         now,
       ),
     ).toBe("2h 47m");

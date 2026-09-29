@@ -343,9 +343,9 @@ describe("windowRows", () => {
     // A subscription account runs on both at once, and a nearly spent five-hour
     // window beside an untouched weekly one says something neither row can alone.
     const rows = windowRows([
-      { id: "c5", label: "Claude · 5-hour", remainingPercent: 4 },
+      { id: "c5", label: "Claude · 5h", remainingPercent: 4 },
       { id: "cw", label: "Claude · weekly", remainingPercent: 100 },
-      { id: "g5", label: "Gemini · 5-hour", remainingPercent: 98 },
+      { id: "g5", label: "Gemini · 5h", remainingPercent: 98 },
       { id: "gw", label: "Gemini · weekly", remainingPercent: 100 },
     ]);
 
@@ -361,8 +361,8 @@ describe("windowRows", () => {
     // follow the family. Pairing the two five-hour windows instead would put two
     // different budgets on one row and read as one budget with two figures.
     const rows = windowRows([
-      { id: "c5", label: "Claude · 5-hour", remainingPercent: 4 },
-      { id: "g5", label: "Gemini · 5-hour", remainingPercent: 98 },
+      { id: "c5", label: "Claude · 5h", remainingPercent: 4 },
+      { id: "g5", label: "Gemini · 5h", remainingPercent: 98 },
       { id: "cw", label: "Claude · weekly", remainingPercent: 100 },
       { id: "gw", label: "Gemini · weekly", remainingPercent: 100 },
     ]);
@@ -386,7 +386,7 @@ describe("windowRows", () => {
 
   it("keeps a third window of the same family on a row of its own", () => {
     const rows = windowRows([
-      { id: "a", label: "Zeta · 5-hour", remainingPercent: 4 },
+      { id: "a", label: "Zeta · 5h", remainingPercent: 4 },
       { id: "b", label: "Zeta · weekly", remainingPercent: 100 },
       { id: "c", label: "Zeta · monthly", remainingPercent: 50 },
     ]);
@@ -410,9 +410,9 @@ describe("windowRows", () => {
 describe("windowKind", () => {
   it("names a five-hour window from the hours left on it", () => {
     // A rolling five-hour window cannot have more than five hours left.
-    expect(windowKind(60)).toBe("5-hour");
-    expect(windowKind(300)).toBe("5-hour");
-    expect(windowKind(6 * 60)).toBe("5-hour");
+    expect(windowKind(60)).toBe("5h");
+    expect(windowKind(300)).toBe("5h");
+    expect(windowKind(6 * 60)).toBe("5h");
   });
 
   it("names the weekly window from the days left on it", () => {
@@ -422,7 +422,7 @@ describe("windowKind", () => {
   });
 
   it("leaves a window unnamed when the remaining time fits neither", () => {
-    // Calling a 45-hour allowance either would be a guess.
+    // Calling a 45h allowance either would be a guess.
     expect(windowKind(45 * 60)).toBeUndefined();
     expect(windowKind(7 * 60)).toBeUndefined();
   });

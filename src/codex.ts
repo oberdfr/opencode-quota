@@ -177,7 +177,7 @@ const WEEK_MINUTES = 10_080;
  */
 export function windowLabel(minutes: number | undefined, fallback: string): string {
   if (!minutes || minutes <= 0) return fallback;
-  if (minutes === FIVE_HOUR_MINUTES) return "5-hour";
+  if (minutes === FIVE_HOUR_MINUTES) return "5h";
   if (minutes % WEEK_MINUTES === 0) return `${Math.round(minutes / WEEK_MINUTES)}-week`;
   if (minutes % 1440 === 0) return `${minutes / 1440}-day`;
   if (minutes % 60 === 0) return `${Math.round(minutes / 60)}-hour`;

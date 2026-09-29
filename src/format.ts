@@ -401,8 +401,14 @@ function orderFamilies(rows: QuotaLine[][]): QuotaLine[][] {
 
 /** What a pair needs in order to be drawn beside itself. */
 export interface PairPlan {
-  /** Column holding the window each allowance sits in. */
-  windowWidth: number;
+  /**
+   * Width of each column's window name, in the order the columns are drawn.
+   *
+   * Sized to the data per column rather than to the longest of them, because the
+   * column is what the bar is paid for: "5h" and "weekly" are not the same width,
+   * and padding the short one out to match threw away bar on every account.
+   */
+  windowWidths: number[];
   /** 0 when the width will not take a bar, in which case the percentage carries it. */
   barWidth: number;
 }
@@ -436,7 +442,7 @@ export function pairPlan(
   const names = lines.map(lineWindowName);
   if (names.some((name) => name === "")) return undefined;
 
-  const windowWidth = Math.min(Math.max(...names.map((n) => n.length), min), max);
+  const windowWidths = names.map((name) => Math.min(Math.max(name.length, min), max));
   // The widest trailing detail in the pair, not the widest one that could ever be
   // shown. Reserving the worst case cost a bar on every account, because most
   // countdowns are "4h 52m" and only the long weekly ones reach seven characters.
@@ -451,8 +457,10 @@ export function pairPlan(
   // label, the bar and its gap, the percentage and the trailing detail. The gap
   // after the label belongs to the bar, so a barless column does not pay for it.
   const roomFor = (bar: number) => {
-    const perColumn = windowWidth + (bar > 0 ? 1 + bar : 0) + COLUMN_OVERHEAD + (detail > 0 ? 2 + detail : 0);
-    return perColumn * lines.length + COLUMN_GAP * (lines.length - 1);
+    const perColumn = (width: number) =>
+      width + (bar > 0 ? 1 + bar : 0) + COLUMN_OVERHEAD + (detail > 0 ? 2 + detail : 0);
+    return windowWidths.reduce((total, width) => total + perColumn(width), 0) +
+      COLUMN_GAP * (lines.length - 1);
   };
   if (roomFor(0) > budget) return undefined;
 
@@ -461,7 +469,7 @@ export function pairPlan(
   // A bar one or two characters wide is not a bar, it is a smudge that reads as a
   // rendering fault. Below the narrowest that still says something, the percentage
   // carries the figure on its own.
-  return { windowWidth, barWidth: barWidth >= MIN_PAIRED_BAR ? barWidth : 0 };
+  return { windowWidths, barWidth: barWidth >= MIN_PAIRED_BAR ? barWidth : 0 };
 }
 
 /** Room kept per column for the two spaces and the percentage. */
@@ -469,8 +477,14 @@ const COLUMN_OVERHEAD = 2 + 4;
 /** Narrowest bar that still reads as a bar rather than a smudge. */
 const MIN_PAIRED_BAR = 4;
 
-/** A window kind, or undefined when the provider does not say which it is. */
-export type WindowKind = "5-hour" | "weekly";
+/**
+ * A window kind, or undefined when the provider does not say which it is.
+ *
+ * Abbreviated because the name is not decoration: it is the widest fixed part of
+ * a row, and every character in it comes straight out of the bar. "5h" says the
+ * same as "5-hour" next to a countdown that already reads "4h 52m".
+ */
+export type WindowKind = "5h" | "weekly";
 
 /**
  * Names an allowance's window from how long it has left.
@@ -484,7 +498,7 @@ export type WindowKind = "5-hour" | "weekly";
  */
 export function windowKind(minutes: number | undefined): WindowKind | undefined {
   if (minutes === undefined || minutes <= 0) return undefined;
-  if (minutes <= 6 * 60) return "5-hour";
+  if (minutes <= 6 * 60) return "5h";
   if (minutes >= 5 * 24 * 60) return "weekly";
   return undefined;
 }

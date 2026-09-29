@@ -44,7 +44,7 @@ import {
  */
 const CONTENT_FALLBACK = 60;
 const BAR_WIDTH = 12;
-const MIN_LABEL_WIDTH = 6;
+const MIN_LABEL_WIDTH = 2;
 
 /**
  * Space under an account name, before its first allowance.
@@ -458,7 +458,7 @@ export default Plugin.define({
                         line={line}
                         label={windowOf(line)}
                         now={props.now}
-                        width={plan.windowWidth}
+                        width={plan.windowWidths[index] ?? props.width}
                         barWidth={plan.barWidth}
                         gap={index === 0 ? undefined : COLUMN_GAP}
                       />

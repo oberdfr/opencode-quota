@@ -49,7 +49,7 @@ function payload(plan: string, primarySeconds: number, secondarySeconds: number 
 
 describe("windowLabel", () => {
   it("names the rolling five-hour window", () => {
-    expect(windowLabel(300, "Primary window")).toBe("5-hour");
+    expect(windowLabel(300, "Primary window")).toBe("5h");
   });
 
   it("names a weekly window in weeks", () => {
@@ -96,7 +96,7 @@ describe("a paid subscription", () => {
   });
 
   it("names each window after the limit it reports", () => {
-    expect(usage?.primary?.label).toBe("5-hour");
+    expect(usage?.primary?.label).toBe("5h");
     expect(usage?.secondary?.label).toBe("1-week");
   });
 
@@ -138,7 +138,7 @@ describe("older payload shape", () => {
       },
     });
 
-    expect(usage?.primary?.label).toBe("5-hour");
+    expect(usage?.primary?.label).toBe("5h");
     expect(usage?.secondary?.label).toBe("1-week");
     expect(usage?.secondary?.remainingPercent).toBe(55);
     expect(isPaidPlan(usage?.plan)).toBe(true);
@@ -167,7 +167,7 @@ describe("the account a subscription produces", () => {
     expect(account?.subscription).toBe("Pro");
     // Both halves of the budget are marked so the view can read them side by side.
     expect(account?.lines.every((line) => line.paired)).toBe(true);
-    expect(account?.lines.map((line) => line.label)).toEqual(["5-hour", "1-week"]);
+    expect(account?.lines.map((line) => line.label)).toEqual(["5h", "1-week"]);
   });
 
   it("leaves a free account unlabelled with nothing to pair", async () => {

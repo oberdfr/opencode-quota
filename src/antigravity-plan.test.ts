@@ -74,8 +74,8 @@ describe("the window on each allowance", () => {
     );
 
     expect(mapped?.lines.map((line) => line.label)).toEqual([
-      "Gemini Pro · 5-hour",
-      "Claude · 5-hour",
+      "Gemini Pro · 5h",
+      "Claude · 5h",
     ]);
   });
 
@@ -109,8 +109,8 @@ describe("the window on each allowance", () => {
     );
 
     expect(mapped?.lines.map((line) => line.label)).toEqual([
-      "Gemini Pro · 5-hour",
-      "Claude · 5-hour",
+      "Gemini Pro · 5h",
+      "Claude · 5h",
       "Gemini Pro · weekly",
       "Claude · weekly",
     ]);
