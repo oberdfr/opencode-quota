@@ -405,7 +405,7 @@ export interface PairPlan {
    * Width of each column's window name, in the order the columns are drawn.
    *
    * Sized to the data per column rather than to the longest of them, because the
-   * column is what the bar is paid for: "5h" and "weekly" are not the same width,
+   * column is what the bar is paid for: "5h" and "wk" are not the same width,
    * and padding the short one out to match threw away bar on every account.
    */
   windowWidths: number[];
@@ -480,11 +480,13 @@ const MIN_PAIRED_BAR = 4;
 /**
  * A window kind, or undefined when the provider does not say which it is.
  *
- * Abbreviated because the name is not decoration: it is the widest fixed part of
- * a row, and every character in it comes straight out of the bar. "5h" says the
- * same as "5-hour" next to a countdown that already reads "4h 52m".
+ * Both are abbreviated, and both for the same reason: the name is the widest fixed
+ * part of a row, and every character in it comes straight out of the bar beside it.
+ * "5h" and "wk" say the same as "5-hour" and "weekly" next to countdowns that
+ * already read "4h 52m" and "6d 23h", and the six characters they give back are
+ * the difference between a bar worth looking at and a smudge.
  */
-export type WindowKind = "5h" | "weekly";
+export type WindowKind = "5h" | "wk";
 
 /**
  * Names an allowance's window from how long it has left.
@@ -499,7 +501,7 @@ export type WindowKind = "5h" | "weekly";
 export function windowKind(minutes: number | undefined): WindowKind | undefined {
   if (minutes === undefined || minutes <= 0) return undefined;
   if (minutes <= 6 * 60) return "5h";
-  if (minutes >= 5 * 24 * 60) return "weekly";
+  if (minutes >= 5 * 24 * 60) return "wk";
   return undefined;
 }
 

@@ -53,8 +53,8 @@ describe("windowLabel", () => {
   });
 
   it("names a weekly window in weeks", () => {
-    expect(windowLabel(10_080, "Weekly window")).toBe("1-week");
-    expect(windowLabel(20_160, "Weekly window")).toBe("2-week");
+    expect(windowLabel(10_080, "Weekly window")).toBe("1-wk");
+    expect(windowLabel(20_160, "Weekly window")).toBe("2-wk");
   });
 
   it("names a 30-day window in days instead of implying a weekly limit", () => {
@@ -97,7 +97,7 @@ describe("a paid subscription", () => {
 
   it("names each window after the limit it reports", () => {
     expect(usage?.primary?.label).toBe("5h");
-    expect(usage?.secondary?.label).toBe("1-week");
+    expect(usage?.secondary?.label).toBe("1-wk");
   });
 
   it("carries the plan so the view can label the account", () => {
@@ -139,7 +139,7 @@ describe("older payload shape", () => {
     });
 
     expect(usage?.primary?.label).toBe("5h");
-    expect(usage?.secondary?.label).toBe("1-week");
+    expect(usage?.secondary?.label).toBe("1-wk");
     expect(usage?.secondary?.remainingPercent).toBe(55);
     expect(isPaidPlan(usage?.plan)).toBe(true);
   });
@@ -167,7 +167,7 @@ describe("the account a subscription produces", () => {
     expect(account?.subscription).toBe("Pro");
     // Both halves of the budget are marked so the view can read them side by side.
     expect(account?.lines.every((line) => line.paired)).toBe(true);
-    expect(account?.lines.map((line) => line.label)).toEqual(["5h", "1-week"]);
+    expect(account?.lines.map((line) => line.label)).toEqual(["5h", "1-wk"]);
   });
 
   it("leaves a free account unlabelled with nothing to pair", async () => {

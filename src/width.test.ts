@@ -24,8 +24,8 @@ const claude5h = (id = "c5") => ({
   remainingPercent: 4,
   resetTime: new Date(NOW + 2 * HOUR + 47 * 60_000).toISOString(),
 });
-const claudeWeekly = { id: "cw", label: "Claude · weekly", remainingPercent: 100, resetTime: new Date(NOW + 6 * DAY + 21 * HOUR).toISOString() };
-const geminiWeekly = { id: "gw", label: "Gemini · weekly", remainingPercent: 99, resetTime: new Date(NOW + 6 * DAY + 18 * HOUR).toISOString() };
+const claudeWeekly = { id: "cw", label: "Claude · wk", remainingPercent: 100, resetTime: new Date(NOW + 6 * DAY + 21 * HOUR).toISOString() };
+const geminiWeekly = { id: "gw", label: "Gemini · wk", remainingPercent: 99, resetTime: new Date(NOW + 6 * DAY + 18 * HOUR).toISOString() };
 
 describe("a pair in a narrow dialog", () => {
   it("keeps a bar at 52 characters, the width of the dialog on this terminal", () => {
@@ -51,7 +51,7 @@ describe("a pair in a narrow dialog", () => {
 
     // "5h" and "weekly" are both six. Padding past that is width thrown away,
     // and on a narrow terminal that width is the bar.
-    expect(plan?.windowWidths).toEqual([2, 6]);
+    expect(plan?.windowWidths).toEqual([2, 2]);
   });
 
   it("measures the detail it will really print", () => {
@@ -74,7 +74,9 @@ describe("a pair in a narrow dialog", () => {
   it("drops a bar too narrow to read rather than drawing a smudge", () => {
     // One or two filled cells is not a bar, it is what a bar looks like when
     // something has gone wrong, and a percentage beside it would be believed.
-    const plan = pairPlan([claude5h(), claudeWeekly], NOW, 2, 18, 12, 44);
+    // There is a band of widths between the barless form and a readable bar, and
+    // what sits in it is no bar rather than a bad one.
+    const plan = pairPlan([claude5h(), claudeWeekly], NOW, 2, 18, 12, 40);
 
     expect(plan?.barWidth).toBe(0);
   });

@@ -344,9 +344,9 @@ describe("windowRows", () => {
     // window beside an untouched weekly one says something neither row can alone.
     const rows = windowRows([
       { id: "c5", label: "Claude · 5h", remainingPercent: 4 },
-      { id: "cw", label: "Claude · weekly", remainingPercent: 100 },
+      { id: "cw", label: "Claude · wk", remainingPercent: 100 },
       { id: "g5", label: "Gemini · 5h", remainingPercent: 98 },
-      { id: "gw", label: "Gemini · weekly", remainingPercent: 100 },
+      { id: "gw", label: "Gemini · wk", remainingPercent: 100 },
     ]);
 
     // Gemini reads before Claude, whatever order the provider handed them over in.
@@ -363,8 +363,8 @@ describe("windowRows", () => {
     const rows = windowRows([
       { id: "c5", label: "Claude · 5h", remainingPercent: 4 },
       { id: "g5", label: "Gemini · 5h", remainingPercent: 98 },
-      { id: "cw", label: "Claude · weekly", remainingPercent: 100 },
-      { id: "gw", label: "Gemini · weekly", remainingPercent: 100 },
+      { id: "cw", label: "Claude · wk", remainingPercent: 100 },
+      { id: "gw", label: "Gemini · wk", remainingPercent: 100 },
     ]);
 
     expect(rows.map((row) => row.map((line) => line.id))).toEqual([
@@ -377,7 +377,7 @@ describe("windowRows", () => {
     // A free account only has the weekly one, so it has nothing to pair with and
     // the row is not padded out to look like it is missing something.
     const rows = windowRows([
-      { id: "g", label: "Gemini · weekly", remainingPercent: 100 },
+      { id: "g", label: "Gemini · wk", remainingPercent: 100 },
       { id: "c", label: "Claude", remainingPercent: 6 },
     ]);
 
@@ -387,7 +387,7 @@ describe("windowRows", () => {
   it("keeps a third window of the same family on a row of its own", () => {
     const rows = windowRows([
       { id: "a", label: "Zeta · 5h", remainingPercent: 4 },
-      { id: "b", label: "Zeta · weekly", remainingPercent: 100 },
+      { id: "b", label: "Zeta · wk", remainingPercent: 100 },
       { id: "c", label: "Zeta · monthly", remainingPercent: 50 },
     ]);
 
@@ -416,9 +416,9 @@ describe("windowKind", () => {
   });
 
   it("names the weekly window from the days left on it", () => {
-    expect(windowKind(5 * 24 * 60)).toBe("weekly");
-    expect(windowKind(7 * 24 * 60)).toBe("weekly");
-    expect(windowKind(166 * 60)).toBe("weekly");
+    expect(windowKind(5 * 24 * 60)).toBe("wk");
+    expect(windowKind(7 * 24 * 60)).toBe("wk");
+    expect(windowKind(166 * 60)).toBe("wk");
   });
 
   it("leaves a window unnamed when the remaining time fits neither", () => {

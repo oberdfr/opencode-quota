@@ -171,14 +171,19 @@ const WEEK_MINUTES = 10_080;
  *
  * The endpoint does not name its windows and which ones exist depends on the
  * plan: a free account reports one 30-day window, a paid one also reports a
- * 5-hour and a weekly allowance. Naming from the reported length means the row
+ * five-hour and a weekly allowance. Naming from the reported length means the row
  * describes itself instead of guessing, and a free account's lone window reads
  * "30-day" rather than implying a weekly limit it does not have.
+ *
+ * The names are abbreviated for the same reason the Antigravity ones are: they are
+ * the widest fixed part of a row and every character comes out of the bar. A Codex
+ * subscription shows the same two windows as an Antigravity one, and a dialog that
+ * spelled one out and not the other would read as two different things.
  */
 export function windowLabel(minutes: number | undefined, fallback: string): string {
   if (!minutes || minutes <= 0) return fallback;
   if (minutes === FIVE_HOUR_MINUTES) return "5h";
-  if (minutes % WEEK_MINUTES === 0) return `${Math.round(minutes / WEEK_MINUTES)}-week`;
+  if (minutes % WEEK_MINUTES === 0) return `${Math.round(minutes / WEEK_MINUTES)}-wk`;
   if (minutes % 1440 === 0) return `${minutes / 1440}-day`;
   if (minutes % 60 === 0) return `${Math.round(minutes / 60)}-hour`;
   return fallback;

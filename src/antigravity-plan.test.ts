@@ -89,7 +89,7 @@ describe("the window on each allowance", () => {
       }),
     );
 
-    expect(mapped?.lines[0]?.label).toBe("Gemini Pro · weekly");
+    expect(mapped?.lines[0]?.label).toBe("Gemini Pro · wk");
   });
 
   it("keeps both windows of a subscription account as separate rows", async () => {
@@ -111,8 +111,8 @@ describe("the window on each allowance", () => {
     expect(mapped?.lines.map((line) => line.label)).toEqual([
       "Gemini Pro · 5h",
       "Claude · 5h",
-      "Gemini Pro · weekly",
-      "Claude · weekly",
+      "Gemini Pro · wk",
+      "Claude · wk",
     ]);
   });
 

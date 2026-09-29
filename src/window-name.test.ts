@@ -26,17 +26,17 @@ const windows = (resetOffsetMs: number, id: string, label: string, percent = 100
 });
 
 const claude5h = () => windows(4 * 3600_000 + 59 * 60_000, "c5", "Claude · 5h");
-const claudeWeekly = () => windows(6 * 86400_000 + 23 * 3600_000, "cw", "Claude · weekly");
+const claudeWeekly = () => windows(6 * 86400_000 + 23 * 3600_000, "cw", "Claude · wk");
 
 describe("the name of a window", () => {
   it("abbreviates the five-hour one", () => {
     expect(windowKind(3 * HOUR)).toBe("5h");
   });
 
-  it("leaves the weekly one spelled out", () => {
-    // "wk" would save two more characters, but "weekly" is the word people look
-    // for, and the bar is no longer being squeezed to nothing without it.
-    expect(windowKind(6 * DAY)).toBe("weekly");
+  it("abbreviates the weekly one too", () => {
+    // Six characters is a third of a bar on a terminal this narrow, and the
+    // countdown beside it already says how long the window has left.
+    expect(windowKind(6 * DAY)).toBe("wk");
   });
 
   it("names nothing when the length is neither", () => {
@@ -50,10 +50,10 @@ describe("what the shorter name buys", () => {
     const perColumn = pairPlan([claude5h(), claudeWeekly()], NOW, 2, 18, 12, 52);
     const sharedColumn = pairPlan([claude5h(), claudeWeekly()], NOW, 6, 18, 12, 52);
 
-    // "5h" is two characters and "weekly" is six. Sized per column the row spends
-    // eight on the two names; sized to the longest it spends twelve.
-    expect(perColumn?.windowWidths).toEqual([2, 6]);
-    expect(perColumn?.barWidth).toBe(6);
+    // "5h" and "wk" are both two. Sized per column the row spends four on the two
+    // names; sized to the longest of the spelled-out pair it spends twelve.
+    expect(perColumn?.windowWidths).toEqual([2, 2]);
+    expect(perColumn?.barWidth).toBe(8);
     expect(sharedColumn?.barWidth).toBe(4);
   });
 
