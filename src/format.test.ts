@@ -349,9 +349,10 @@ describe("windowRows", () => {
       { id: "gw", label: "Gemini · weekly", remainingPercent: 100 },
     ]);
 
+    // Gemini reads before Claude, whatever order the provider handed them over in.
     expect(rows.map((row) => row.map((line) => line.id))).toEqual([
-      ["c5", "cw"],
       ["g5", "gw"],
+      ["c5", "cw"],
     ]);
   });
 
@@ -367,8 +368,8 @@ describe("windowRows", () => {
     ]);
 
     expect(rows.map((row) => row.map((line) => line.id))).toEqual([
-      ["c5", "cw"],
       ["g5", "gw"],
+      ["c5", "cw"],
     ]);
   });
 
@@ -385,9 +386,9 @@ describe("windowRows", () => {
 
   it("keeps a third window of the same family on a row of its own", () => {
     const rows = windowRows([
-      { id: "a", label: "Claude · 5-hour", remainingPercent: 4 },
-      { id: "b", label: "Claude · weekly", remainingPercent: 100 },
-      { id: "c", label: "Claude · monthly", remainingPercent: 50 },
+      { id: "a", label: "Zeta · 5-hour", remainingPercent: 4 },
+      { id: "b", label: "Zeta · weekly", remainingPercent: 100 },
+      { id: "c", label: "Zeta · monthly", remainingPercent: 50 },
     ]);
 
     expect(rows.map((row) => row.map((line) => line.id))).toEqual([["a", "b"], ["c"]]);

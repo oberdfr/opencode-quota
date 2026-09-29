@@ -409,12 +409,18 @@ export default Plugin.define({
         return widest;
       };
       const layout = () =>
-        pairPlan(widestPair(), MIN_LABEL_WIDTH, MAX_LABEL_WIDTH, BAR_WIDTH, contentWidth());
+        pairPlan(widestPair(), props.now, MIN_LABEL_WIDTH, MAX_LABEL_WIDTH, BAR_WIDTH, contentWidth());
       /** The window each column of a pair sits in, without the family on it. */
       const windowOf = (line: QuotaLine) => {
         const marker = " · ";
         const at = line.label.lastIndexOf(marker);
         return at === -1 ? line.label : line.label.slice(at + marker.length);
+      };
+      /** The family a line belongs to, for the heading above its windows. */
+      const lineFamily = (line: QuotaLine) => {
+        const marker = " · ";
+        const at = line.label.indexOf(marker);
+        return at === -1 ? line.label : line.label.slice(0, at);
       };
       // Only set them side by side when the row genuinely fits; otherwise they
       // stack, since a wrapped pair leaves a fragment of the second bar on the
@@ -436,14 +442,18 @@ export default Plugin.define({
           ) : (
             rows().map((row) => {
               const plan = row.length > 1 ? layout() : undefined;
-              const family = row[0]!.label.split(" · ")[0]!;
+              if (!plan) {
+                return row.map((line) => <Allowance line={line} now={props.now} width={props.width} />);
+              }
+              // The family on its own line, so the row below it belongs to it and
+              // the two windows have the whole width to spend between them. Sharing
+              // one line with the windows left so little room that the bar was the
+              // thing that had to go, and a bar is the figure worth keeping.
               return (
-                <box flexDirection="row">
-                  {plan && plan.familyWidth > 0 ? (
-                    <text fg={muted}>{formatLabel(family, plan.familyWidth + COLUMN_GAP)}</text>
-                  ) : null}
-                  {row.map((line, index) =>
-                    plan ? (
+                <>
+                  <text fg={muted}>{lineFamily(row[0]!)}</text>
+                  <box flexDirection="row">
+                    {row.map((line, index) => (
                       <Allowance
                         line={line}
                         label={windowOf(line)}
@@ -452,11 +462,9 @@ export default Plugin.define({
                         barWidth={plan.barWidth}
                         gap={index === 0 ? undefined : COLUMN_GAP}
                       />
-                    ) : (
-                      <Allowance line={line} now={props.now} width={props.width} />
-                    ),
-                  )}
-                </box>
+                    ))}
+                  </box>
+                </>
               );
             })
           )}

@@ -359,13 +359,48 @@ export function windowRows(lines: readonly QuotaLine[]): QuotaLine[][] {
     index.set(family, [...rowsForFamily, row]);
   }
 
-  return rows;
+  return orderFamilies(rows);
+}
+
+/**
+ * Where a family sits in the reading order.
+ *
+ * Gemini before Claude, and everything else after both. The provider reports
+ * families in whatever order the buckets arrived in, which is not a reading
+ * order: an account whose Claude buckets happen to be listed first would show
+ * Claude first, and the two families would swap places between refreshes.
+ */
+function familyRank(family: string): number {
+  const name = family.toLowerCase();
+  if (name.includes("gemini")) return 0;
+  if (name.includes("claude")) return 1;
+  return 2;
+}
+
+/** Puts the families in a fixed order, leaving each family's own rows in place. */
+function orderFamilies(rows: QuotaLine[][]): QuotaLine[][] {
+  // A family repeated over several rows keeps those rows together, and only the
+  // first appearance decides where its block goes.
+  const order: string[] = [];
+  for (const row of rows) {
+    const family = lineFamily(row[0]!);
+    if (!order.includes(family)) order.push(family);
+  }
+
+  const rank = (row: QuotaLine[]) => {
+    const family = order[order.indexOf(lineFamily(row[0]!))]!;
+    return { family: familyRank(family), at: order.indexOf(family) };
+  };
+
+  return [...rows].sort((a, b) => {
+    const left = rank(a);
+    const right = rank(b);
+    return left.family - right.family || left.at - right.at;
+  });
 }
 
 /** What a pair needs in order to be drawn beside itself. */
 export interface PairPlan {
-  /** Column holding the family, when the window names are shown on their own. */
-  familyWidth: number;
   /** Column holding the window each allowance sits in. */
   windowWidth: number;
   /** 0 when the width will not take a bar, in which case the percentage carries it. */
@@ -375,19 +410,17 @@ export interface PairPlan {
 /**
  * Works out how a pair of windows can be drawn side by side in the room there is.
  *
- * A family running on two windows is only readable as a pair when both are on
- * screen at once, so the layout is built around the two levels of detail that
- * matter — which window, and how much is left in it — and the bar is what gives
- * way first. The family moves to a column of its own so the two window names do
- * not each carry it, which on a narrow terminal is the difference between fitting
- * and not.
+ * The family is on the line above, so the whole width is the two windows' to
+ * spend, and the bar is kept: it is the figure the row is really showing, and the
+ * percentage beside it is the same number spelled out.
  *
- * Returns undefined when even the barless form does not fit, and the caller stacks
- * the allowances: a wrapped pair leaves a fragment of the second bar on the line
+ * Returns undefined when the pair does not fit at all, and the caller stacks the
+ * allowances: a wrapped pair leaves a fragment of the second bar on the line
  * below, which reads as stray output rather than as a second limit.
  */
 export function pairPlan(
   lines: readonly QuotaLine[],
+  now: number,
   min: number,
   max: number,
   maxBar: number,
@@ -395,25 +428,31 @@ export function pairPlan(
 ): PairPlan | undefined {
   if (lines.length < 2) return undefined;
 
-  const families = lines.map(lineFamily);
   // Only one family per row. Two different budgets side by side is not a pair of
-  // one budget, and a single family column would mislabel one of them.
+  // one budget.
+  const families = lines.map(lineFamily);
   if (!families.every((family) => family === families[0])) return undefined;
 
   const names = lines.map(lineWindowName);
   if (names.some((name) => name === "")) return undefined;
 
-  const familyWidth = families[0]!.length;
   const windowWidth = Math.min(Math.max(...names.map((n) => n.length), min), max);
-  const leading = familyWidth + COLUMN_GAP;
+  // The widest trailing detail in the pair, not the widest one that could ever be
+  // shown. Reserving the worst case cost a bar on every account, because most
+  // countdowns are "4h 52m" and only the long weekly ones reach seven characters.
+  const detail = Math.max(
+    0,
+    ...lines.map((line) => {
+      const meta = formatMeta(line, now);
+      return meta ? meta.length : 0;
+    }),
+  );
 
-  // label, then the bar and its gap, the percentage and the trailing detail. The
-  // gap after the label belongs to the bar, so a barless column does not pay for
-  // it: on a narrow terminal that space is the difference between a pair and two
-  // rows.
+  // label, the bar and its gap, the percentage and the trailing detail. The gap
+  // after the label belongs to the bar, so a barless column does not pay for it.
   const roomFor = (bar: number) => {
-    const perColumn = windowWidth + (bar > 0 ? 1 + bar : 0) + COLUMN_OVERHEAD + META_ROOM;
-    return leading + perColumn * lines.length + COLUMN_GAP * (lines.length - 1);
+    const perColumn = windowWidth + (bar > 0 ? 1 + bar : 0) + COLUMN_OVERHEAD + (detail > 0 ? 2 + detail : 0);
+    return perColumn * lines.length + COLUMN_GAP * (lines.length - 1);
   };
   if (roomFor(0) > budget) return undefined;
 
@@ -422,15 +461,13 @@ export function pairPlan(
   // A bar one or two characters wide is not a bar, it is a smudge that reads as a
   // rendering fault. Below the narrowest that still says something, the percentage
   // carries the figure on its own.
-  return { familyWidth, windowWidth, barWidth: barWidth >= MIN_PAIRED_BAR ? barWidth : 0 };
+  return { windowWidth, barWidth: barWidth >= MIN_PAIRED_BAR ? barWidth : 0 };
 }
 
 /** Room kept per column for the two spaces and the percentage. */
 const COLUMN_OVERHEAD = 2 + 4;
-/** Room kept per column for the two spaces and the trailing detail. */
-const META_ROOM = 2 + 7;
 /** Narrowest bar that still reads as a bar rather than a smudge. */
-const MIN_PAIRED_BAR = 5;
+const MIN_PAIRED_BAR = 4;
 
 /** A window kind, or undefined when the provider does not say which it is. */
 export type WindowKind = "5-hour" | "weekly";
