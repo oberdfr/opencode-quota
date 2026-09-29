@@ -26,8 +26,8 @@ import {
   pairedLayout,
   quotaTone,
   showProviderSpinner,
-  splitPairedLines,
   strong,
+  windowRows,
 } from "./format.ts";
 
 /**
@@ -35,14 +35,29 @@ import {
  * taken off.
  *
  * A row wider than this wraps, which leaves a stray bar fragment on the line
- * below. This is an estimate of what the `xlarge` dialog leaves after padding:
- * it could not be measured from here, so the paired layout treats it as a
- * best guess and falls back to one allowance per row whenever the pair does not
- * fit, rather than trusting it.
+ * below. The figure is what the layout asks for rather than a measurement of the
+ * dialog, which could not be taken from here: the layout reserves room for the
+ * longest label and the longest trailing detail it will ever be given, so a real
+ * pair comes out well under it — 42 characters for a five-hour and a weekly
+ * window side by side. It is the threshold the layout falls back below, and a
+ * pair that does not fit under it is stacked rather than wrapped.
  */
-const CONTENT_BUDGET = 76;
+const CONTENT_BUDGET = 88;
 const BAR_WIDTH = 12;
 const MIN_LABEL_WIDTH = 8;
+
+/**
+ * Space under an account name, before its first allowance.
+ *
+ * A whole row is too much: the name reads as a heading of its own section rather
+ * than as the account the rows below it belong to, and a free account with one
+ * allowance ends up with a row of nothing. The grid is a row per line, so the gap
+ * that is actually wanted — a few pixels, enough to see the break — has to come
+ * from somewhere other than the row count. It cannot: a terminal has no half row.
+ * So this is deliberately 0 rather than 1, and the break is carried by the
+ * indentation of the rows below.
+ */
+const NAME_GAP = 0;
 const MAX_LABEL_WIDTH = 18;
 const SPINNER_FRAMES = 10;
 const CLOSE_COMMAND_ID = "opencode-quota.close";
@@ -348,17 +363,27 @@ export default Plugin.define({
       // Gemini Pro and Flash are still tracked and reported separately; they are
       // only collapsed for display.
       const lines = () => mergeGeminiAllowances(account().lines);
-      // Allowances that are two halves of one budget share a row, so the two
-      // limits of a subscription can be read against each other.
-      const grouped = () => splitPairedLines(lines());
+      // A family's five-hour and weekly windows share a row, so the two can be read
+      // against each other rather than one per line.
+      const rows = () => windowRows(lines());
+      // The widest pair decides the columns, so every pair in the account starts
+      // its bar in the same place.
+      const widestPair = () => {
+        let widest: QuotaLine[] = [];
+        for (const row of rows()) {
+          if (row.length > widest.length) widest = row;
+        }
+        return widest;
+      };
       const layout = () =>
-        pairedLayout(grouped().paired, MIN_LABEL_WIDTH, MAX_LABEL_WIDTH, BAR_WIDTH, CONTENT_BUDGET);
-      // Only pair them when the row genuinely fits; otherwise they stack, since a
-      // wrapped pair leaves a fragment of the second bar on the line below.
-      const sideBySide = () => grouped().paired.length > 1 && layout() !== undefined;
+        pairedLayout(widestPair(), MIN_LABEL_WIDTH, MAX_LABEL_WIDTH, BAR_WIDTH, CONTENT_BUDGET);
+      // Only set them side by side when the row genuinely fits; otherwise they
+      // stack, since a wrapped pair leaves a fragment of the second bar on the
+      // line below, which reads as stray output rather than as a second limit.
+      const fits = () => layout() !== undefined;
       return (
         <box flexDirection="column" marginTop={1}>
-          <box flexDirection="row" gap={1}>
+          <box flexDirection="row" gap={1} marginBottom={NAME_GAP}>
             <text fg={muted}>{accountTitle(account())}</text>
             {/* Names the plan, so a paid account is recognisable as one. */}
             {account().subscription ? (
@@ -369,25 +394,22 @@ export default Plugin.define({
             <text fg={muted} opacity={0.7}>  disabled</text>
           ) : account().status === "error" ? (
             <text fg={muted} opacity={0.7}>{`  ${account().error ?? "error"}`}</text>
-          ) : sideBySide() ? (
-            <>
-              <box flexDirection="row">
-                {grouped().paired.map((line, index) => (
-                  <Allowance
-                    line={line}
-                    now={props.now}
-                    width={layout()?.labelWidth ?? props.width}
-                    barWidth={layout()?.barWidth}
-                    gap={index === 0 ? undefined : COLUMN_GAP}
-                  />
-                ))}
-              </box>
-              {grouped().stacked.map((line) => (
-                <Allowance line={line} now={props.now} width={props.width} />
-              ))}
-            </>
           ) : (
-            lines().map((line) => <Allowance line={line} now={props.now} width={props.width} />)
+            rows().map((row) => (
+              <box flexDirection="row">
+                {row.length > 1 && fits()
+                  ? row.map((line, index) => (
+                      <Allowance
+                        line={line}
+                        now={props.now}
+                        width={layout()?.labelWidth ?? props.width}
+                        barWidth={layout()?.barWidth}
+                        gap={index === 0 ? undefined : COLUMN_GAP}
+                      />
+                    ))
+                  : row.map((line) => <Allowance line={line} now={props.now} width={props.width} />)}
+              </box>
+            ))
           )}
         </box>
       );

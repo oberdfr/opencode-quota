@@ -11,7 +11,7 @@ import {
   quotaTone,
   pairedLayout,
   showProviderSpinner,
-  splitPairedLines,
+  windowRows,
   strong,
   windowKind,
 } from "./format.ts";
@@ -234,7 +234,7 @@ describe("formatMeta", () => {
       { id: "primary", label: "Primary window", remainingPercent: 73, windowMinutes: 43_200, resetTime: new Date(now + 30 * 86_400_000).toISOString() },
       now,
     );
-    expect(meta).toBe("30d left");
+    expect(meta).toBe("30d 0h");
   });
 
   it("prefers the reset countdown over the window length", () => {
@@ -244,14 +244,14 @@ describe("formatMeta", () => {
       { id: "primary", label: "Primary window", remainingPercent: 73, windowMinutes: 43_200, resetTime: new Date(now + 29 * 86_400_000).toISOString() },
       now,
     );
-    expect(meta).toBe("29d left");
+    expect(meta).toBe("29d 0h");
   });
 
   it("degrades cleanly when only one side is known", () => {
     expect(formatMeta({ id: "a", label: "A", remainingPercent: 1, windowMinutes: 300 }, now)).toBe("5h window");
     expect(
       formatMeta({ id: "a", label: "A", remainingPercent: 1, resetTime: new Date(now + 3_600_000).toISOString() }, now),
-    ).toBe("1h left");
+    ).toBe("1h 0m");
     expect(formatMeta({ id: "a", label: "A", remainingPercent: 1 }, now)).toBeUndefined();
   });
 });
@@ -339,39 +339,70 @@ describe("showProviderSpinner", () => {
   });
 });
 
-describe("splitPairedLines", () => {
-  it("groups consecutive paired lines and leaves the rest stacked", () => {
-    const { paired, stacked } = splitPairedLines([
-      { id: "a", label: "5-hour", remainingPercent: 73, paired: true },
-      { id: "b", label: "Weekly", remainingPercent: 36, paired: true },
-      { id: "c", label: "Credits", remainingPercent: 0 },
+describe("windowRows", () => {
+  it("sets a family's five-hour and weekly windows side by side", () => {
+    // A subscription account runs on both at once, and a nearly spent five-hour
+    // window beside an untouched weekly one says something neither row can alone.
+    const rows = windowRows([
+      { id: "c5", label: "Claude · 5-hour", remainingPercent: 4 },
+      { id: "cw", label: "Claude · weekly", remainingPercent: 100 },
+      { id: "g5", label: "Gemini · 5-hour", remainingPercent: 98 },
+      { id: "gw", label: "Gemini · weekly", remainingPercent: 100 },
     ]);
 
-    expect(paired.map((l) => l.id)).toEqual(["a", "b"]);
-    expect(stacked.map((l) => l.id)).toEqual(["c"]);
+    expect(rows.map((row) => row.map((line) => line.id))).toEqual([
+      ["c5", "cw"],
+      ["g5", "gw"],
+    ]);
   });
 
-  it("stops grouping at the first unpaired line", () => {
-    // A later paired line after a stacked one is independent, so it must not join
-    // the first row and misrepresent itself as part of that budget.
-    const { paired, stacked } = splitPairedLines([
-      { id: "a", label: "5-hour", remainingPercent: 73, paired: true },
-      { id: "b", label: "Other", remainingPercent: 10 },
-      { id: "c", label: "Weekly", remainingPercent: 36, paired: true },
+  it("gives each family its own row rather than interleaving them", () => {
+    // Windows arrive grouped by window rather than by family, so pairing has to
+    // follow the family. Pairing the two five-hour windows instead would put two
+    // different budgets on one row and read as one budget with two figures.
+    const rows = windowRows([
+      { id: "c5", label: "Claude · 5-hour", remainingPercent: 4 },
+      { id: "g5", label: "Gemini · 5-hour", remainingPercent: 98 },
+      { id: "cw", label: "Claude · weekly", remainingPercent: 100 },
+      { id: "gw", label: "Gemini · weekly", remainingPercent: 100 },
     ]);
 
-    expect(paired.map((l) => l.id)).toEqual(["a"]);
-    expect(stacked.map((l) => l.id)).toEqual(["b", "c"]);
+    expect(rows.map((row) => row.map((line) => line.id))).toEqual([
+      ["c5", "cw"],
+      ["g5", "gw"],
+    ]);
   });
 
-  it("leaves an account with no paired lines entirely stacked", () => {
-    const { paired, stacked } = splitPairedLines([
-      { id: "g", label: "Gemini", remainingPercent: 100 },
-      { id: "c", label: "Claude", remainingPercent: 8 },
+  it("leaves a family with a single window on its own row", () => {
+    // A free account only has the weekly one, so it has nothing to pair with and
+    // the row is not padded out to look like it is missing something.
+    const rows = windowRows([
+      { id: "g", label: "Gemini · weekly", remainingPercent: 100 },
+      { id: "c", label: "Claude", remainingPercent: 6 },
     ]);
 
-    expect(paired).toEqual([]);
-    expect(stacked).toHaveLength(2);
+    expect(rows.map((row) => row.map((line) => line.id))).toEqual([["g"], ["c"]]);
+  });
+
+  it("keeps a third window of the same family on a row of its own", () => {
+    const rows = windowRows([
+      { id: "a", label: "Claude · 5-hour", remainingPercent: 4 },
+      { id: "b", label: "Claude · weekly", remainingPercent: 100 },
+      { id: "c", label: "Claude · monthly", remainingPercent: 50 },
+    ]);
+
+    expect(rows.map((row) => row.map((line) => line.id))).toEqual([["a", "b"], ["c"]]);
+  });
+
+  it("takes the provider's own pairing for lines it marks", () => {
+    // Codex marks its two windows as a pair, and that is how it knows they belong
+    // together, so the labels say nothing about it.
+    const rows = windowRows([
+      { id: "p", label: "Primary window", remainingPercent: 73, paired: true },
+      { id: "s", label: "Secondary window", remainingPercent: 36, paired: true },
+    ]);
+
+    expect(rows.map((row) => row.map((line) => line.id))).toEqual([["p", "s"]]);
   });
 });
 

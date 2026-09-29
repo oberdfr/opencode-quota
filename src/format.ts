@@ -149,16 +149,38 @@ export function formatLabel(label: string, width: number): string {
   return `${label.slice(0, Math.max(0, width - 1))}…`.padEnd(width, " ");
 }
 
-/** "3d" / "5h" / "20m" — the time until the window refills. */
+/** "3d 4h" / "5h 20m" — how long an allowance still has to run. */
 export function shortReset(iso: string | undefined, now: number): string | undefined {
   if (!iso) return undefined;
   const at = Date.parse(iso);
   if (!Number.isFinite(at)) return undefined;
-  const minutes = Math.round((at - now) / 60_000);
-  if (minutes <= 0) return "now";
-  if (minutes < 60) return `${minutes}m`;
-  if (minutes < 60 * 24) return `${Math.round(minutes / 60)}h`;
-  return `${Math.round(minutes / (60 * 24))}d`;
+  return describeDuration(at - now);
+}
+
+/**
+ * How long is left, at two levels of depth and no more.
+ *
+ * Past a day the hours alone are too coarse to plan around — "6d" says nothing
+ * about whether the window frees up tonight or at the weekend — so the days are
+ * paired with the hours under them. Under a day, minutes are what decides whether
+ * to start now or in a bit, and the hours alone would round them away. Always two
+ * levels, never three: a figure that precise is noise, and it is the widest part
+ * of the row.
+ *
+ * Under an hour there is no second level left to give, so it is minutes alone
+ * rather than a padded "0h 43m".
+ */
+export function describeDuration(deltaMs: number): string | undefined {
+  if (!Number.isFinite(deltaMs)) return undefined;
+  if (deltaMs <= 0) return "now";
+
+  const totalMinutes = Math.floor(deltaMs / MINUTE);
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+
+  const days = Math.floor(totalMinutes / (60 * 24));
+  const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  return `${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m`;
 }
 
 /** "5h" / "7d" — how long the window runs. */
@@ -172,15 +194,15 @@ export function shortWindow(minutes: number | undefined): string | undefined {
 /**
  * Trailing detail for a row.
  *
- * The reset countdown is the actionable figure, so it is what is shown; the
- * window length only appears when the provider gives no reset time. Printing
- * both produced rows like "30d left · 29d left", where the first number is the
- * window length rather than something left, and it pushed the row past the
- * dialog width.
+ * The time the window still has to run is the actionable figure, so it is what is
+ * shown, and it is the only thing: "left" added nothing the placement did not
+ * already say, and it was one more word on the widest part of the row. The window
+ * length appears only when the provider gives no reset time, since a length is not
+ * something anyone has left.
  */
 export function formatMeta(line: QuotaLine, now: number): string | undefined {
   const reset = shortReset(line.resetTime, now);
-  if (reset) return `${reset} left`;
+  if (reset) return reset;
   const window = shortWindow(line.windowMinutes);
   return window ? `${window} window` : undefined;
 }
@@ -276,25 +298,68 @@ export function mergeGeminiAllowances(lines: readonly QuotaLine[]): QuotaLine[] 
 /** Gap between two allowances drawn on the same row. */
 export const COLUMN_GAP = 2;
 
+/** The family a line belongs to, without the window it sits in. */
+function lineFamily(line: QuotaLine): string {
+  const marker = " · ";
+  const at = line.label.indexOf(marker);
+  return at === -1 ? line.label : line.label.slice(0, at);
+}
+
+/** The window a line sits in, or an empty string when it is not named. */
+function lineWindowName(line: QuotaLine): string {
+  const marker = " · ";
+  const at = line.label.lastIndexOf(marker);
+  return at === -1 ? "" : line.label.slice(at + marker.length);
+}
+
 /**
- * Splits an account's lines into the ones to draw side by side and the rest.
+ * Lays an account's allowances out in rows.
  *
- * Only consecutive `paired` lines are grouped, so an account can lead with a
- * row of comparable windows and still list independent quotas underneath.
+ * A family running on a five-hour window and a weekly one is one budget seen
+ * twice, and setting the two side by side is what lets them be read against each
+ * other: a nearly spent five-hour window beside an untouched weekly one says
+ * something no single row can. The pairing is per family, so Claude and Gemini
+ * each get their own row rather than four allowances interleaved.
+ *
+ * A provider that marks its own pairable lines is taken at its word and consecutive
+ * ones share a row, since that is how the consumer already knows they belong
+ * together.
  */
-export function splitPairedLines(lines: QuotaLine[]): { paired: QuotaLine[]; stacked: QuotaLine[] } {
-  const paired: QuotaLine[] = [];
-  const stacked: QuotaLine[] = [];
+export function windowRows(lines: readonly QuotaLine[]): QuotaLine[][] {
+  const rows: QuotaLine[][] = [];
+  const index = new Map<string, QuotaLine[][]>();
   let stillPaired = true;
+
   for (const line of lines) {
-    if (line.paired && stillPaired) {
-      paired.push(line);
+    if (line.paired) {
+      const open = stillPaired ? rows[rows.length - 1] : undefined;
+      if (open && open.length < 2) {
+        open.push(line);
+        continue;
+      }
+      const row = [line];
+      rows.push(row);
       continue;
     }
+
     stillPaired = false;
-    stacked.push(line);
+
+    // Two windows of one family, and only two: a third would not fit a row, and
+    // the pairing is what the width is spent on.
+    const family = lineFamily(line);
+    const rowsForFamily = index.get(family) ?? [];
+    const target = rowsForFamily.find((row) => row.length < 2);
+    if (target) {
+      target.push(line);
+      continue;
+    }
+
+    const row = [line];
+    rows.push(row);
+    index.set(family, [...rowsForFamily, row]);
   }
-  return { paired, stacked };
+
+  return rows;
 }
 
 export interface PairedLayout {

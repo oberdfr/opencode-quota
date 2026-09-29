@@ -120,8 +120,8 @@ describe("compact metadata", () => {
     expect(shortWindow(45)).toBe("45m");
     expect(shortWindow(undefined)).toBeUndefined();
 
-    expect(shortReset(new Date(now + 3 * 86_400_000).toISOString(), now)).toBe("3d");
-    expect(shortReset(new Date(now + 2 * 3_600_000).toISOString(), now)).toBe("2h");
+    expect(shortReset(new Date(now + 3 * 86_400_000 + 4 * 3_600_000).toISOString(), now)).toBe("3d 4h");
+    expect(shortReset(new Date(now + 2 * 3_600_000 + 20 * 60_000).toISOString(), now)).toBe("2h 20m");
     expect(shortReset(new Date(now - 1000).toISOString(), now)).toBe("now");
     expect(shortReset(undefined, now)).toBeUndefined();
   });
@@ -131,7 +131,7 @@ describe("compact metadata", () => {
       { id: "primary", label: "Primary window", remainingPercent: 73, windowMinutes: 10_080, resetTime: new Date(now + 30 * 86_400_000).toISOString() },
       now,
     );
-    expect(meta).toBe("30d left");
+    expect(meta).toBe("30d 0h");
   });
 
   it("omits metadata entirely when the provider reports none", () => {
