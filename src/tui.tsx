@@ -26,9 +26,9 @@ import {
   pairPlan,
   quotaTone,
   showProviderSpinner,
-  strong,
   windowRows,
 } from "./format.ts";
+import { strong } from "./tui-format.ts";
 
 /**
  * Characters available for a row once the dialog's left and right padding are

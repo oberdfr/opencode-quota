@@ -5,7 +5,6 @@
  * unit tested without a terminal.
  */
 
-import { bold, StyledText } from "@opentui/core";
 import type { QuotaAccount, QuotaLine, QuotaReport } from "./rpc.ts";
 
 /**
@@ -19,21 +18,6 @@ import type { QuotaAccount, QuotaLine, QuotaReport } from "./rpc.ts";
  */
 export function showProviderSpinner(refreshing: boolean, hasReport: boolean): boolean {
   return refreshing && hasReport;
-}
-
-/**
- * Bold text for use as a `text` child.
- *
- * `TextNodeRenderable.add` accepts a string, another renderable, or a
- * `StyledText`, and throws on anything else. The `bold` helper on its own returns
- * a bare chunk, which is none of those, so the chunk is wrapped in a
- * `StyledText`: the styled value the renderable actually expects.
- *
- * The return type is widened only so the published child type accepts it. The
- * value really is a `StyledText` at runtime, which `isStyledText` confirms.
- */
-export function strong(value: string): string {
-  return new StyledText([bold(value)]) as unknown as string;
 }
 
 const MINUTE = 60_000;
